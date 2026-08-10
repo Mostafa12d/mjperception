@@ -1,0 +1,24 @@
+# UKF belief update over a reduced latent subspace.
+# Every value here is a starting point surfaced for selection, NOT a tuned
+# choice. sweep.py reports the effect of the ones marked OPEN.
+
+dim: 5                        # OPEN: reduced latent dimension (swept 4,5,6)
+alpha: 0.3                    # sigma-point spread; keep small — the predictor is
+                              # locally linear in z only out to |dz| ~ 0.25
+beta: 2.0                     # optimal for Gaussian priors
+kappa: 0.0
+# True reproduces the exact Kalman filter on linear systems when Q > 0;
+# False matches filterpy's convention. See README.
+regenerate_sigma_points: true
+
+p0_mode: empirical            # empirical | scalar
+p0_scale: 1.0
+
+noise_kind: adaptive          # OPEN: adaptive | fixed  (fixed = the ablation)
+r0: 1.0                       # initial / fixed measurement noise
+q0: 1.0e-4                    # OPEN: process noise = willingness to keep revising
+window: 50                    # OPEN: innovation window (swept 20, 50, 100)
+floor: 1.0e-6                 # OPEN: min eigenvalue of R, guarantees PD
+smoothing: 1.0                # 1.0 = replace outright, <1 = exponential blend
+warmup: 10                    # steps before adapting at all
+adapt_Q: false                # OPEN: also estimate Q from K C_nu K^T (Mehra)
