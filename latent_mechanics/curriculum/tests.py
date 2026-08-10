@@ -19,6 +19,10 @@ Run:
 
 from __future__ import annotations
 
+import json
+import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -193,6 +197,70 @@ def test_frozen_components() -> None:
           and d.stiffness_range == (0.0, 8.0), str(d))
 
 
+# ---------------------------------------------------------------------------
+
+# Drawn in a fresh interpreter so the parent's hash salt cannot leak in. Prints
+# the per-family seeds and the first sampled parameter vector per family, which
+# together pin down the whole population draw without simulating anything.
+_DRAW_SNIPPET = """
+import json, sys
+sys.path.insert(0, %(root)r)
+import numpy as np
+from latent_mechanics.curriculum.levels import CurriculumConfig, EVAL_FAMILIES
+from latent_mechanics.curriculum.study import family_seed
+from latent_mechanics.mechanisms import library as lib
+
+cc = CurriculumConfig()
+out = {}
+for fam in EVAL_FAMILIES:
+    s = family_seed(cc.eval_seed, fam)
+    rng = np.random.default_rng(s)
+    p = lib.sample_params(fam, rng, mechanism_id=0)
+    out[fam] = [s, p.density_scale, p.frictionloss, p.damping, p.stiffness,
+                p.springref, sorted(p.extra.items())]
+print(json.dumps(out))
+"""
+
+
+def _draw_in_subprocess(hashseed: str) -> dict:
+    root = str(Path(__file__).resolve().parents[2])
+    env = dict(os.environ, PYTHONHASHSEED=hashseed)
+    r = subprocess.run([sys.executable, "-c", _DRAW_SNIPPET % {"root": root}],
+                       capture_output=True, text=True, env=env, cwd=root)
+    if r.returncode != 0:
+        raise RuntimeError(f"subprocess failed (PYTHONHASHSEED={hashseed}):\n{r.stderr}")
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def test_population_draw_is_reproducible_across_processes() -> None:
+    """A1: the population must follow from the seed, not from the hash salt.
+
+    Two fresh interpreters with deliberately different ``PYTHONHASHSEED`` values
+    must draw the identical population. Under the old
+    ``base_seed + abs(hash(fam)) % 10_000`` this fails, because ``hash`` on a
+    ``str`` is salted per process.
+    """
+    print("\nPopulation draw is reproducible from the seed alone (fresh processes)")
+    try:
+        a = _draw_in_subprocess("1")
+        b = _draw_in_subprocess("12345")
+    except RuntimeError as e:
+        check("two fresh interpreters draw the same population", False, str(e))
+        return
+
+    check("both subprocesses drew every eval family",
+          set(a) == set(b) == set(EVAL_FAMILIES), f"{sorted(a)} vs {sorted(b)}")
+    check("per-family seeds agree across processes",
+          all(a[f][0] == b[f][0] for f in a),
+          str({f: (a[f][0], b[f][0]) for f in a if a[f][0] != b[f][0]}))
+    check("first sampled instance agrees across processes", a == b,
+          str({f: (a[f], b[f]) for f in a if a[f] != b[f]}))
+    # And the seeds must actually differ between families, or the fix would be
+    # trivially satisfied by a constant.
+    seeds = [a[f][0] for f in a]
+    check("per-family seeds are distinct", len(set(seeds)) == len(seeds), str(seeds))
+
+
 def main() -> None:
     print("latent_mechanics.curriculum self-checks")
     test_budget_is_fixed()
@@ -201,6 +269,7 @@ def main() -> None:
     test_eval_instances_are_heldout_everywhere()
     test_geometry_measures()
     test_frozen_components()
+    test_population_draw_is_reproducible_across_processes()
 
     print()
     if _FAILURES:

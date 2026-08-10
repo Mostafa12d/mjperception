@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import pickle
 import time
@@ -60,6 +61,20 @@ from latent_mechanics.train import train as train_stage1
 # Populations
 # ---------------------------------------------------------------------------
 
+def family_seed(base_seed: int, family: str) -> int:
+    """Per-family seed offset that is stable across processes.
+
+    Python's ``hash()`` on ``str`` is salted per interpreter unless
+    ``PYTHONHASHSEED`` is pinned, so the obvious ``base_seed + hash(fam)`` makes
+    the population draw depend on which process drew it. That is invisible while
+    a pickle is cached and silently irreproducible the moment it is not, which is
+    exactly the failure mode a seed is supposed to rule out. sha256 of the family
+    name is stable across processes, machines and Python versions.
+    """
+    digest = hashlib.sha256(family.encode("utf-8")).hexdigest()
+    return int(base_seed) + int(digest[:8], 16) % 10_000
+
+
 def build_pools(cc: CurriculumConfig, stage1_cfg, cache: Path, verbose=True) -> dict:
     """Simulate a pool of training instances per family, once.
 
@@ -82,7 +97,7 @@ def build_pools(cc: CurriculumConfig, stage1_cfg, cache: Path, verbose=True) -> 
 
     pools: dict[str, list] = {}
     for fam, n in need.items():
-        rng = np.random.default_rng(cc.train_seed + abs(hash(fam)) % 10_000)
+        rng = np.random.default_rng(family_seed(cc.train_seed, fam))
         insts = []
         for k in range(n):
             p = lib.sample_params(fam, rng, mechanism_id=len(insts))
@@ -111,7 +126,7 @@ def build_eval_suite(cc: CurriculumConfig, stage1_cfg, cache: Path, verbose=True
 
     suite = []
     for fam in EVAL_FAMILIES:
-        rng = np.random.default_rng(cc.eval_seed + abs(hash(fam)) % 10_000)
+        rng = np.random.default_rng(family_seed(cc.eval_seed, fam))
         for k in range(cc.eval_instances_per_family):
             p = lib.sample_params(fam, rng, mechanism_id=10_000 + len(suite))
             ep = rollout_mechanism(p, stage1_cfg, cc.episodes_per_eval_instance,
