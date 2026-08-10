@@ -51,12 +51,21 @@ from latent_mechanics.online.adaptor import ArrayLike, OnlineLatentAdaptor
 
 @dataclass
 class UKFConfig:
-    """Everything the filter needs. All values are defaults to be swept, not tuned."""
+    """Filter settings.
 
-    dim: int = 5                     # reduced latent dimension -- USER DECISION
+    ``dim``, ``window``, ``adapt_Q`` and ``regenerate_sigma_points`` were chosen
+    by the user on the evidence in ``sweep.py`` and ``drift_check.py``; the rest
+    remain unswept starting points. Provenance is noted per field.
+    """
+
+    # CHOSEN. Best ratio to the oracle ceiling (0.97x vs 1.12x at d=5, 1.17x at
+    # d=4) at equal cost and equal stability. sweep.py.
+    dim: int = 6
     alpha: float = 0.3               # sigma-point spread
     beta: float = 2.0
     kappa: float = 0.0
+    # CHOSEN. Reproduces the exact Kalman filter on linear systems when Q > 0;
+    # filterpy's convention does not. See ukf.py.
     regenerate_sigma_points: bool = True
     # Initial covariance. "empirical" uses the covariance of the training
     # latents projected into the reduced basis, which is the honest prior: it
@@ -66,10 +75,16 @@ class UKFConfig:
     noise_kind: str = "adaptive"     # adaptive | fixed
     r0: float = 1.0
     q0: float = 1e-4
-    window: int = 50
-    floor: float = 1e-6
-    smoothing: float = 1.0
+    # CHOSEN. Stationary objects marginally prefer 50 (0.54x vs 0.59x relative
+    # to no-adaptation), but under Stage-3 friction drift at 0.40/s window 50
+    # becomes actively harmful (1.42x) while 100 is the only setting still
+    # helping (0.94x). The ~9% given up on stationary objects buys the filter
+    # not breaking on time-varying ones. drift_check.py.
+    window: int = 100
+    floor: float = 1e-6           # unswept; follow-up
+    smoothing: float = 1.0        # unswept; follow-up
     warmup: int = 10
+    # LEFT OFF by decision: couples mobility to recent surprise and can run away.
     adapt_Q: bool = False
 
 

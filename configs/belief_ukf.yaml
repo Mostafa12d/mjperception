@@ -1,24 +1,20 @@
 # UKF belief update over a reduced latent subspace.
-# Every value here is a starting point surfaced for selection, NOT a tuned
-# choice. sweep.py reports the effect of the ones marked OPEN.
+# CHOSEN = decided on measured evidence. OPEN = still a starting point.
 
-dim: 5                        # OPEN: reduced latent dimension (swept 4,5,6)
-alpha: 0.3                    # sigma-point spread; keep small — the predictor is
-                              # locally linear in z only out to |dz| ~ 0.25
-beta: 2.0                     # optimal for Gaussian priors
+dim: 6                        # CHOSEN  0.97x oracle ceiling vs 1.12x (d=5), 1.17x (d=4)
+alpha: 0.3                    # OPEN    sigma spread; predictor is locally linear to |dz|~0.25
+beta: 2.0
 kappa: 0.0
-# True reproduces the exact Kalman filter on linear systems when Q > 0;
-# False matches filterpy's convention. See README.
-regenerate_sigma_points: true
+regenerate_sigma_points: true # CHOSEN  exact Kalman filter on linear systems when Q>0
 
-p0_mode: empirical            # empirical | scalar
+p0_mode: empirical            # OPEN    covariance of the training latents in the reduced basis
 p0_scale: 1.0
 
-noise_kind: adaptive          # OPEN: adaptive | fixed  (fixed = the ablation)
-r0: 1.0                       # initial / fixed measurement noise
-q0: 1.0e-4                    # OPEN: process noise = willingness to keep revising
-window: 50                    # OPEN: innovation window (swept 20, 50, 100)
-floor: 1.0e-6                 # OPEN: min eigenvalue of R, guarantees PD
-smoothing: 1.0                # 1.0 = replace outright, <1 = exponential blend
-warmup: 10                    # steps before adapting at all
-adapt_Q: false                # OPEN: also estimate Q from K C_nu K^T (Mehra)
+noise_kind: adaptive          # CHOSEN  fixed R performs at gradient-descent level
+r0: 1.0                       # OPEN    initial measurement noise, before adaptation kicks in
+q0: 1.0e-4                    # OPEN    process noise = willingness to keep revising
+window: 100                   # CHOSEN  only window still helping under 0.40/s friction drift
+floor: 1.0e-6                 # OPEN    min eigenvalue of R (follow-up sweep)
+smoothing: 1.0                # OPEN    1.0 = replace outright (follow-up sweep)
+warmup: 10                    # OPEN
+adapt_Q: false                # CHOSEN  left off

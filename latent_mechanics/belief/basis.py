@@ -16,19 +16,35 @@ variance, 6 components = 94%). A UKF maintaining a full 16x16 covariance would
 be estimating 136 free parameters to describe a roughly 2.4-dimensional object,
 and would need 33 sigma points per update instead of 9-13.
 
-WHICH TABLE THE BASIS COMES FROM -- open question, flagged for the user.
-The brief says "the Stage-1 embedding table", but the statistics it quotes
-(effective dim ~2.4, PC1 = 63%) belong to the *all-families* table from the
-geometry report, not the Stage-1 door-only table:
+WHICH TABLE THE BASIS COMES FROM -- CONFIRMED: the all-families table.
+
+The original brief said "the Stage-1 embedding table", but the statistics it
+quoted (effective dim ~2.4, PC1 = 63%) belong to the *all-families* table from
+the geometry report, not the Stage-1 door-only table:
 
     Stage-1 (48 doors)      PC1 = 40%  PC2 = 19%  effective dim 4.35
     all_families (120 objs) PC1 = 63%  PC2 = 10%  effective dim 2.36
 
-``DEFAULT_TABLE`` therefore points at the all-families checkpoint, because that
-is the table whose geometry was characterised and whose per-family oracle
-ceilings this branch has to be scored against. ``--table`` switches it. Both
-recompute deterministically: the 2-component basis persisted during Stage 2
-reproduces from the Stage-1 table with |cos| = 1.0 on both components.
+The discrepancy was raised with the user and the all-families table was
+confirmed, for three reasons:
+
+  1. It is the table whose geometry the report actually characterised, so the
+     effective-dimensionality argument for reducing to d = 4..6 applies to it
+     and not to the Stage-1 table (whose effective dimension is 4.35, nearly
+     twice as high -- a 6-D reduction would discard materially more there).
+  2. It is the embedding table of the predictor this branch filters. The basis
+     and the predictor must come from the same model or the reduced coordinates
+     describe directions the network never learned to use.
+  3. The per-family oracle ceilings the sweep scores against were measured on
+     this model's held-out objects, so any other basis would make the headline
+     ratios incomparable.
+
+``DEFAULT_TABLE`` therefore points at the all-families checkpoint. Passing a
+different ``table_ckpt`` switches it, and ``load_or_create`` refuses to reuse a
+persisted basis that was fit on a different table rather than silently mixing
+them. Both tables recompute deterministically: the 2-component basis persisted
+during Stage 2 reproduces from the Stage-1 table with |cos| = 1.0 on both
+components, and SVD signs are pinned so the artifact is bit-stable across runs.
 """
 
 from __future__ import annotations
