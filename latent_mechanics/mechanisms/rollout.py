@@ -93,12 +93,21 @@ def simulate_mechanism(
     return MechanismLog(t, q, qdot, qddot, action, tau_p, ncon)
 
 
+def limit_margin_for(lo: float, hi: float) -> float:
+    """Absolute limit margin for a joint spanning ``[lo, hi]``.
+
+    Expressed as a fraction of travel so it means the same thing for a 0.5 m
+    drawer and a 2.26 rad door.
+    """
+    return LIMIT_MARGIN_FRAC * (hi - lo)
+
+
 def near_limit_mask(
     state: np.ndarray, next_state: np.ndarray, lo: float, hi: float
 ) -> np.ndarray:
     """Limit proximity as a fraction of travel, so it means the same thing for a
     0.5 m drawer and a 2.26 rad door."""
-    margin = LIMIT_MARGIN_FRAC * (hi - lo)
+    margin = limit_margin_for(lo, hi)
     at = lambda x: (x < lo + margin) | (x > hi - margin)
     return at(state[:, 0]) | at(next_state[:, 0])
 
@@ -142,9 +151,15 @@ def rollout_mechanism(
         model = lib.build_model(params)
         log = simulate_mechanism(profile.as_fn(), model, n_steps,
                                  lib.perturbations_for(params))
-        tr = transitions_from_log(log.as_stage1_dict(), frame_skip)
+        # This mechanism's own joint range, not the door's -- see
+        # data_gen.transitions_from_log. With the range and margin passed
+        # through, tr["near_limit"] is correct here and is the single source of
+        # truth instead of being recomputed below.
+        tr = transitions_from_log(log.as_stage1_dict(), frame_skip,
+                                  joint_range=(lo, hi),
+                                  limit_margin=limit_margin_for(lo, hi))
         s, a, ns = tr["state"], tr["action"], tr["next_state"]
-        keep = (~near_limit_mask(s, ns, lo, hi) if exclude_near_limit
+        keep = (~tr["near_limit"] if exclude_near_limit
                 else np.ones(len(s), bool))
         if not keep.any():
             continue

@@ -228,6 +228,67 @@ def test_analysis_metrics() -> None:
           mechanics_readout(z2, rng.normal(size=40)) < 0.5)
 
 
+def test_near_limit_uses_each_familys_own_range() -> None:
+    """A2: the near-limit flag must reflect the mechanism's real joint range.
+
+    ``data_gen.JOINT_RANGE`` is the door's ``[-0.17, 2.09]``. A drawer travels
+    ``[0, 0.5] m`` and a laptop hinge ``[0, 2.2] rad``, so scoring either against
+    the door range flags nothing however hard the mechanism is jammed against its
+    stop. This asserts the flag now matches the family's own range, and that the
+    door default is unchanged.
+    """
+    import mujoco
+
+    from latent_mechanics.config import ExperimentConfig
+    from latent_mechanics.data_gen import JOINT_RANGE, transitions_from_log
+    from latent_mechanics.mechanisms.rollout import (
+        limit_margin_for,
+        near_limit_mask,
+        simulate_mechanism,
+    )
+
+    print("\nNear-limit flag follows each family's own joint range")
+    cfg = ExperimentConfig()
+    n_steps = 3000
+    frame_skip = cfg.sim.frame_skip
+
+    for fam, expect_range in (("drawer", (0.0, 0.5)),
+                              ("laptop", (0.0, 2.2)),
+                              ("door", JOINT_RANGE)):
+        rng = np.random.default_rng(1000)
+        params = lib.sample_params(fam, rng, 0)
+        model = lib.build_model(params)
+        _, _, jid = lib.joint_info(model)
+        lo, hi = float(model.jnt_range[jid][0]), float(model.jnt_range[jid][1])
+        check(f"{fam}: joint range is {expect_range}",
+              abs(lo - expect_range[0]) < 1e-9 and abs(hi - expect_range[1]) < 1e-9,
+              f"got ({lo}, {hi})")
+
+        profile = lib.scaled_profile(cfg.excitation, rng, n_steps, frame_skip, params)
+        log = simulate_mechanism(profile.as_fn(), model, n_steps,
+                                 lib.perturbations_for(params))
+        margin = limit_margin_for(lo, hi)
+        tr = transitions_from_log(log.as_stage1_dict(), frame_skip,
+                                  joint_range=(lo, hi), limit_margin=margin)
+        want = near_limit_mask(tr["state"], tr["next_state"], lo, hi)
+        check(f"{fam}: flag matches the family's own range exactly",
+              bool(np.array_equal(tr["near_limit"], want)),
+              f"{int((tr['near_limit'] != want).sum())} disagreeing transitions")
+
+        # And show the stale door range would have been wrong where it matters.
+        stale = transitions_from_log(log.as_stage1_dict(), frame_skip)["near_limit"]
+        if fam == "door":
+            check("door: door-range default still reproduces the old behaviour",
+                  bool(stale.any()) or not want.any(),
+                  f"stale={100*stale.mean():.1f}% want={100*want.mean():.1f}%")
+        else:
+            check(f"{fam}: stale door range really does disagree",
+                  not np.array_equal(stale, want),
+                  f"stale={100*stale.mean():.1f}% vs true={100*want.mean():.1f}%")
+            print(f"        {fam}: door-range flag {100*stale.mean():5.1f}% of "
+                  f"transitions vs {100*want.mean():5.1f}% with the true range")
+
+
 def main() -> None:
     print("latent_mechanics.mechanisms self-checks")
     test_all_families_build()
@@ -239,6 +300,7 @@ def main() -> None:
     test_soft_close_behaviour()
     test_earlier_stages_intact()
     test_analysis_metrics()
+    test_near_limit_uses_each_familys_own_range()
 
     print()
     if _FAILURES:

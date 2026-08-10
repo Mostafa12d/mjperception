@@ -38,6 +38,8 @@ SPLIT_NAMES = {SPLIT_TRAIN: "train", SPLIT_VAL: "val", SPLIT_HELDOUT_DOOR: "held
 
 # Joint limits of the door XMLs; transitions that touch them include a
 # constraint torque that is not part of the action, so they are flagged.
+# These are the *door* defaults. Any caller simulating another mechanism must
+# pass that mechanism's own range -- see ``transitions_from_log``.
 JOINT_RANGE = (-0.17, 2.09)
 LIMIT_MARGIN = 0.05
 
@@ -61,7 +63,11 @@ def episode_length(seconds: float):
 
 
 def transitions_from_log(
-    log: dict, frame_skip: int, tau_key: str = "tau_ft"
+    log: dict,
+    frame_skip: int,
+    tau_key: str = "tau_ft",
+    joint_range: tuple[float, float] = JOINT_RANGE,
+    limit_margin: float = LIMIT_MARGIN,
 ) -> dict[str, np.ndarray]:
     """Slice a 500 Hz episode log into model-rate transitions.
 
@@ -71,6 +77,14 @@ def transitions_from_log(
     torques ``j+1 .. j+K``. Starting at ``j = K-1`` and striding by ``K`` makes
     that span coincide exactly with one zero-order-hold block, which is what
     makes the recorded action a single constant number.
+
+    ``joint_range`` and ``limit_margin`` define the ``near_limit`` column, and
+    they default to the *door* XML's limits. They are parameters rather than
+    module constants because the door range is meaningless for the other
+    mechanisms: a drawer travels ``[0, 0.5] m`` and a laptop hinge ``[0, 2.2]
+    rad``, so the door's ``[-0.17, 2.09]`` flags nothing at all on a drawer that
+    is in fact sitting hard against its stop. Callers simulating a non-door
+    mechanism must pass that mechanism's own range.
     """
     theta, theta_dot = log["theta"], log["theta_dot"]
     tau = log[tau_key]
@@ -103,8 +117,8 @@ def transitions_from_log(
             "excitation profile must be a zero-order hold on the frame_skip grid"
         )
 
-    lo, hi = JOINT_RANGE
-    at_limit = lambda th: (th < lo + LIMIT_MARGIN) | (th > hi - LIMIT_MARGIN)
+    lo, hi = joint_range
+    at_limit = lambda th: (th < lo + limit_margin) | (th > hi - limit_margin)
     near_limit = at_limit(state[:, 0]) | at_limit(next_state[:, 0])
 
     return {

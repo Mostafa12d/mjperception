@@ -40,7 +40,7 @@ from latent_mechanics.belief.basis import DEFAULT_TABLE, load_or_create
 from latent_mechanics.config import load_config as load_stage1_config
 from latent_mechanics.data_gen import transitions_from_log
 from latent_mechanics.mechanisms import library as lib
-from latent_mechanics.mechanisms.rollout import near_limit_mask, simulate_mechanism
+from latent_mechanics.mechanisms.rollout import limit_margin_for, simulate_mechanism
 from latent_mechanics.mismatch.perturbations import ParameterDrift
 from latent_mechanics.model import load_checkpoint
 from latent_mechanics.online.adaptor import GradientLatentAdaptor, StaticLatentAdaptor
@@ -65,10 +65,14 @@ def roll_with_drift(params, cfg, drift_rate: float, n_episodes: int,
         if drift_rate > 0:
             perts.append(ParameterDrift(friction_rate=drift_rate, mode="linear"))
         log = simulate_mechanism(profile.as_fn(), model, n_steps, perts)
-        tr = transitions_from_log(log.as_stage1_dict(), frame_skip)
         _, _, jid = lib.joint_info(model)
         lo, hi = float(model.jnt_range[jid][0]), float(model.jnt_range[jid][1])
-        keep = ~near_limit_mask(tr["state"], tr["next_state"], lo, hi)
+        # This object's own joint range, not the door's -- see
+        # data_gen.transitions_from_log.
+        tr = transitions_from_log(log.as_stage1_dict(), frame_skip,
+                                  joint_range=(lo, hi),
+                                  limit_margin=limit_margin_for(lo, hi))
+        keep = ~tr["near_limit"]
         if keep.any():
             S.append(tr["state"][keep]); A.append(tr["action"][keep])
             N.append(tr["next_state"][keep])
