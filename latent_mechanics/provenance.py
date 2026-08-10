@@ -27,7 +27,11 @@ from typing import Any
 STAGE_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("stage1_base", "train.py run_dir/run_name (cfg.train)",
      "runs/latent_mechanics/base/best.pt"),
+    ("stage1_evaluate", "evaluate.py --checkpoint (default)",
+     "runs/latent_mechanics/base/best.pt"),
     ("stage3_online", "configs/online_adaptation.yaml -> experiments.checkpoint",
+     "runs/latent_mechanics/base/best.pt"),
+    ("mismatch_study", "mismatch/config.py MismatchConfig.checkpoint (default)",
      "runs/latent_mechanics/base/best.pt"),
     ("stage4_mechanisms", "mechanisms/study.py per-experiment run dir",
      "runs/latent_mechanics/mechanisms/runs/*/best.pt"),

@@ -158,7 +158,8 @@ def evaluate(
     out_dir: str | None = None,
     device_spec: str | None = None,
 ) -> dict:
-    model, table, cfg, extra = load_checkpoint(checkpoint, device="cpu")
+    model, table, cfg, extra = load_checkpoint(checkpoint, device="cpu",
+                                               stage="stage1_evaluate")
     if table is None:
         raise ValueError(
             f"{checkpoint} has no embedding table; stage-1 evaluation needs the "

@@ -66,7 +66,8 @@ class Runner:
     def __init__(self, cfg: StudyConfig) -> None:
         self.cfg = cfg
         self.device = torch.device(cfg.device)
-        model, table, stage1_cfg, extra = load_checkpoint(cfg.checkpoint, device=self.device)
+        model, table, stage1_cfg, extra = load_checkpoint(
+            cfg.checkpoint, device=self.device, stage="mismatch_study")
         if table is None:
             raise ValueError("checkpoint has no embedding table")
         self.model = model.freeze()
