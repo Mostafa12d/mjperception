@@ -136,6 +136,96 @@ def test_read_only() -> None:
     check("no gradients left on weights", all(p.grad is None for p in m.parameters()))
 
 
+def test_residualise_and_purity_primitives() -> None:
+    """A4: the scale-dominance primitives do what they claim on known inputs."""
+    print("\nScale-residualisation and purity primitives")
+    rng = np.random.default_rng(0)
+    scale = rng.normal(size=200)
+    # A latent that is PURELY a scale axis plus noise orthogonal to it.
+    z = np.outer(scale, rng.normal(size=8)) + 0.01 * rng.normal(size=(200, 8))
+    r = an.residualise(z, [scale])
+    check("residualising the generating covariate removes almost all variance",
+          r.var() / z.var() < 0.01, f"{r.var()/z.var():.4f}")
+    check("residual is orthogonal to the covariate",
+          abs(float(np.corrcoef(r[:, 0], scale)[0, 1])) < 1e-8)
+    check("residualising an unrelated covariate barely changes z",
+          an.residualise(z, [rng.normal(size=200)]).var() / z.var() > 0.9)
+
+    # Purity: perfectly separated blobs -> 1.0; one shared blob -> ~chance.
+    fam = np.array(["a"] * 50 + ["b"] * 50)
+    sep = np.vstack([rng.normal(-8, 0.1, (50, 4)), rng.normal(8, 0.1, (50, 4))])
+    check("separated families give purity 1.0",
+          an.nn_family_purity(sep, fam)["overall"] == 1.0)
+    mixed = rng.normal(0, 1, (100, 4))
+    check("one blob with random labels gives near-chance purity",
+          an.nn_family_purity(mixed, fam)["overall"] < 0.7,
+          f"{an.nn_family_purity(mixed, fam)['overall']:.2f}")
+
+    ex = an.excess_silhouette(mixed, k_max=8, n_null=10)
+    check("excess silhouette is ~0 on unimodal data", abs(ex["excess"]) < 0.10,
+          f"{ex['excess']:+.3f}")
+    check("and its p-value is not significant", ex["p_value"] > 0.05,
+          f"p={ex['p_value']:.2f}")
+
+
+def test_scale_dominance_reproduces_audit_numbers() -> None:
+    """A4: the committed pipeline must reproduce the audit's headline numbers.
+
+    The audit measured excess silhouette +0.256 on raw z, falling to +0.055 once
+    log-inertia is regressed out, with raw per-family 1-NN purities of
+    door 0.25 / drawer 0.90 / bifold 0.80. Those were computed in an ad hoc
+    script; this asserts the ported code agrees, so the numbers are reproducible
+    by running the pipeline.
+
+    Skips (rather than fails) if the geometry artefacts have not been generated.
+    """
+    from pathlib import Path
+
+    print("\nscale_dominance reproduces the audit's numbers")
+    latents = Path("runs/latent_mechanics/geometry/latents_all_families.npz")
+    if not latents.exists():
+        print(f"  [SKIP] {latents} not present -- run the geometry report first")
+        return
+
+    from latent_mechanics.geometry.extract import LatentDataset
+    from latent_mechanics.geometry.report import scale_dominance_for
+
+    ds = LatentDataset.load(latents)
+    check("the audited latent table is 120 x 16",
+          ds.z.shape == (120, 16), str(ds.z.shape))
+    sd = scale_dominance_for(ds, k_max=15, n_null=20)
+
+    raw, resid = sd["raw"]["excess"], sd["resid_log_inertia"]["excess"]
+    check("raw excess silhouette is +0.256", abs(raw - 0.256) < 5e-3, f"{raw:+.4f}")
+    check("log-inertia-regressed excess silhouette is +0.055",
+          abs(resid - 0.055) < 5e-3, f"{resid:+.4f}")
+    check("raw silhouette is 0.572", abs(sd["raw"]["silhouette"] - 0.572) < 5e-3,
+          f"{sd['raw']['silhouette']:.4f}")
+    check("raw PC1 carries 63.3% of the variance",
+          abs(100 * sd["raw"]["pc1_variance"] - 63.3) < 0.2,
+          f"{100*sd['raw']['pc1_variance']:.2f}%")
+
+    pur = sd["raw"]["purity"]["per_family"]
+    for fam, want in (("door", 0.25), ("drawer", 0.90), ("bifold", 0.80),
+                      ("laptop", 0.95)):
+        check(f"raw 1-NN purity for {fam} is {want:.2f}",
+              abs(pur[fam] - want) < 1e-9, f"{pur[fam]:.3f}")
+
+    # The qualitative conclusion, asserted as a property rather than a constant.
+    check("removing log-inertia collapses most of the excess",
+          sd["fraction_of_excess_explained_by_inertia"] > 0.7,
+          f"{sd['fraction_of_excess_explained_by_inertia']:.2f}")
+    check("removing per-object data scale leaves excess insignificant",
+          sd["resid_data_scale"]["p_value"] > 0.05,
+          f"p={sd['resid_data_scale']['p_value']:.2f}")
+    check("PC1 is strongly anti-correlated with log-inertia",
+          sd["pc_scale_correlation"]["log_inertia"][0] < -0.85,
+          f"{sd['pc_scale_correlation']['log_inertia'][0]:+.3f}")
+    check("local purity is far more scale-robust than silhouette",
+          sd["resid_log_inertia"]["purity"]["overall"] > 0.6,
+          f"{sd['resid_log_inertia']['purity']['overall']:.3f}")
+
+
 def main() -> None:
     print("latent_mechanics.geometry self-checks")
     test_null_is_a_null()
@@ -144,6 +234,8 @@ def main() -> None:
     test_jacobian_is_per_sample()
     test_interpolation_and_spectrum()
     test_read_only()
+    test_residualise_and_purity_primitives()
+    test_scale_dominance_reproduces_audit_numbers()
     print()
     if _FAILURES:
         print(f"{len(_FAILURES)} FAILED: {', '.join(_FAILURES)}")

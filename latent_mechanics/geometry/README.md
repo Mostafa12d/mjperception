@@ -26,8 +26,12 @@ removed. Two independent tests:
 |---|---|
 | ARI(6 clusters, true **family**) | **+0.398** |
 | ARI(6 clusters, **inertia sextile**) | **+0.398** |
-| excess silhouette over matched null, raw `z` | +0.254 |
+| excess silhouette over matched null, raw `z` | +0.256 |
 | excess silhouette over matched null, **log-inertia regressed out** | **+0.055** |
+
+Produced by **Step 3b** of the pipeline (`analyses.scale_dominance`, printed by
+`report.py` and written to `geometry_report.json` under `scale_dominance`, figure
+`scale_dominance.png`). Regression-tested in `geometry.tests`.
 
 The clusters predict "how heavy is it" exactly as well as they predict "what kind
 of thing is it", and 78% of the apparent structure is the scale axis alone.

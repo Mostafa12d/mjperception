@@ -197,6 +197,113 @@ def figure_linearity(jac: dict, lin: dict, attribution: dict, out: Path) -> Path
     return _save(fig, out / "linearity_attribution.png")
 
 
+def per_object_data_scale(ds: LatentDataset) -> tuple[np.ndarray, np.ndarray]:
+    """Each object's OWN observed scale: log RMS step size and log RMS action.
+
+    Ground-truth inertia is the natural scale covariate but a filter never sees
+    it. These two are measurable from the object's own transitions, so they test
+    the same question using only what is actually observable.
+    """
+    with np.load(ds.npz_path, allow_pickle=False) as a:
+        did, spl = a["door_id"], a["split"]
+        st, nxt, act = a["state"], a["next_state"], a["action"]
+    rms_dq, rms_a = [], []
+    for i in range(len(ds)):
+        m = (did == i) & np.isin(spl, [0, 1])       # this object's train/val rows
+        d = nxt[m] - st[m]
+        rms_dq.append(np.sqrt((d[:, 0] ** 2).mean()) if m.any() else np.nan)
+        rms_a.append(np.sqrt((act[m][:, 0] ** 2).mean()) if m.any() else np.nan)
+    f = lambda v: np.log10(np.maximum(np.asarray(v, float), 1e-12))
+    return f(rms_dq), f(rms_a)
+
+
+def scale_dominance_for(ds: LatentDataset, k_max: int = 15, n_null: int = 20) -> dict:
+    """Step 3b on one latent dataset."""
+    inertia = ds.params[:, ds.param_names.index("inertia")]
+    log_I = np.log10(np.maximum(inertia, 1e-12))
+    log_dq, log_a = per_object_data_scale(ds)
+    sd = an.scale_dominance(ds.z, ds.family, log_I, data_scale=(log_dq, log_a),
+                            k_max=k_max, n_null=n_null)
+    sd["log_inertia_range"] = [float(log_I.min()), float(log_I.max())]
+    return sd
+
+
+def _print_scale_dominance(sd: dict) -> None:
+    order = [k for k in ("raw", "resid_log_inertia", "resid_data_scale",
+                         "resid_inertia_and_data_scale") if k in sd]
+    print(f"  {'variant':30s} {'PC1%':>6} {'d_eff':>6} {'sil':>6} {'null':>6} "
+          f"{'excess':>8} {'p':>6} {'ARI':>7} {'1NN pur':>8}")
+    for k in order:
+        r = sd[k]
+        print(f"  {k:30s} {100*r['pc1_variance']:>6.1f} {r['effective_dim']:>6.2f} "
+              f"{r['silhouette']:>6.3f} {r['null_mean']:>6.3f} {r['excess']:>+8.3f} "
+              f"{r['p_value']:>6.2f} {r['family_agreement']['adjusted_rand']:>+7.3f} "
+              f"{r['purity']['overall']:>8.3f}")
+    print(f"\n  log10(inertia) spans {sd['log_inertia_range'][0]:+.2f} to "
+          f"{sd['log_inertia_range'][1]:+.2f}")
+    print(f"  fraction of excess silhouette explained by log-inertia alone: "
+          f"{100*sd['fraction_of_excess_explained_by_inertia']:.0f}%")
+    print("  PC correlation with scale (PC1..PC4):")
+    for name, rs in sd["pc_scale_correlation"].items():
+        print(f"    {name:16s} " + " ".join(f"{v:+.3f}" for v in rs))
+    print("  per-family 1-NN purity:")
+    fams = sorted(sd["raw"]["purity"]["per_family"])
+    print(f"    {'variant':30s} " + " ".join(f"{f[:9]:>10s}" for f in fams))
+    for k in order:
+        print(f"    {k:30s} "
+              + " ".join(f"{sd[k]['purity']['per_family'][f]:>10.2f}" for f in fams))
+
+
+def figure_scale_dominance(sd: dict, out: Path) -> Path:
+    """Step 3b: excess silhouette and purity, before and after removing scale."""
+    order = [k for k in ("raw", "resid_log_inertia", "resid_data_scale",
+                         "resid_inertia_and_data_scale") if k in sd]
+    short = {"raw": "raw z", "resid_log_inertia": "log-inertia\nout",
+             "resid_data_scale": "data scale\nout",
+             "resid_inertia_and_data_scale": "both\nout"}
+    fig, axes = plt.subplots(1, 3, figsize=(12.5, 3.6))
+    x = np.arange(len(order))
+
+    ax = axes[0]
+    ax.bar(x - 0.2, [sd[k]["silhouette"] for k in order], 0.4, label="real",
+           color="#d62728")
+    ax.bar(x + 0.2, [sd[k]["null_mean"] for k in order], 0.4,
+           label="matched unimodal null", color="0.7")
+    ax.set_xticks(x); ax.set_xticklabels([short[k] for k in order], fontsize=7)
+    ax.set_ylabel("best silhouette")
+    ax.set_title("(a) separation vs null", fontsize=9); ax.legend(fontsize=7)
+
+    ax = axes[1]
+    cols = ["#d62728" if sd[k]["p_value"] < 0.05 else "0.7" for k in order]
+    ax.bar(x, [sd[k]["excess"] for k in order], 0.6, color=cols)
+    for i, k in enumerate(order):
+        ax.annotate(f"p={sd[k]['p_value']:.2f}",
+                    xy=(i, sd[k]["excess"]), ha="center", va="bottom", fontsize=7)
+    ax.axhline(0, color="k", lw=1)
+    ax.set_xticks(x); ax.set_xticklabels([short[k] for k in order], fontsize=7)
+    ax.set_ylabel("excess silhouette over null")
+    ax.set_title("(b) how much survives removing scale?", fontsize=9)
+
+    ax = axes[2]
+    fams = sorted(sd["raw"]["purity"]["per_family"])
+    w = 0.8 / len(order)
+    for i, k in enumerate(order):
+        ax.bar(np.arange(len(fams)) + (i - (len(order) - 1) / 2) * w,
+               [sd[k]["purity"]["per_family"][f] for f in fams], w,
+               label=short[k].replace("\n", " "))
+    ax.axhline(1.0 / len(fams), color="k", ls=":", lw=1)
+    ax.set_xticks(np.arange(len(fams)))
+    ax.set_xticklabels(fams, rotation=30, ha="right", fontsize=7)
+    ax.set_ylabel("1-NN family purity")
+    ax.set_title("(c) local purity is far more scale-robust", fontsize=9)
+    ax.legend(fontsize=6.5)
+
+    fig.suptitle("Is the latent's cluster structure anything more than "
+                 "mechanical scale?", fontsize=12, y=1.04)
+    fig.tight_layout()
+    return _save(fig, out / "scale_dominance.png")
+
+
 # ---------------------------------------------------------------------------
 
 def run(out: Path, k_max: int = 15, n_null: int = 20, epochs: int = 40) -> dict:
@@ -243,6 +350,13 @@ def run(out: Path, k_max: int = 15, n_null: int = 20, epochs: int = 40) -> dict:
     report["multimodality"] = {k: v for k, v in ev.items() if k != "gmm"}
     report["multimodality"]["gmm"] = [asdict(r) for r in ev["gmm"]]
     figure_multimodality(ev, out)
+
+    print("\n" + "=" * 78 + "\nSTEP 3b  is that structure just mechanical scale?\n"
+          + "=" * 78)
+    sd = scale_dominance_for(ds, k_max, n_null)
+    report["scale_dominance"] = sd
+    _print_scale_dominance(sd)
+    figure_scale_dominance(sd, out)
 
     # ---- shared model + data for steps 4-6 -----------------------------
     model, table, _, _ = load_checkpoint(ckpt, device="cpu")

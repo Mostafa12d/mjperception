@@ -16,6 +16,7 @@ sample size and dimension. Only the *difference* is evidence.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Sequence
 
 import numpy as np
 import torch
@@ -218,6 +219,132 @@ def multimodality_evidence(
     }
 
 
+def residualise(z: np.ndarray, covariates: Sequence[np.ndarray]) -> np.ndarray:
+    """Remove the linear part of ``z`` explained by ``covariates``.
+
+    OLS of ``z`` on ``[1, *covariates]``, returning the residual. Used to ask
+    whether the latent's apparent cluster structure is anything more than one
+    scalar -- mechanical scale -- re-expressed.
+    """
+    X = np.column_stack([np.ones(len(z))] + [np.asarray(c, float) for c in covariates])
+    beta, *_ = np.linalg.lstsq(X, z, rcond=None)
+    return z - X @ beta
+
+
+def best_silhouette(z: np.ndarray, k_max: int = 15, seed: int = 0) -> tuple[float, int]:
+    """Max silhouette over K = 2..k_max, and the K attaining it."""
+    best, best_k = -1.0, 0
+    for k in range(2, k_max + 1):
+        lab = KMeans(k, n_init=10, random_state=seed).fit_predict(z)
+        if len(set(lab)) < 2:
+            continue
+        s = float(silhouette_score(z, lab))
+        if s > best:
+            best, best_k = s, k
+    return best, best_k
+
+
+def nn_family_purity(z: np.ndarray, family: np.ndarray) -> dict:
+    """Fraction of objects whose nearest latent neighbour is the same family.
+
+    A *local* statistic, deliberately alongside silhouette rather than instead of
+    it. Silhouette asks whether the cloud separates globally; this asks whether a
+    latent's immediate neighbourhood is mechanically like it. The two can and do
+    disagree, and the disagreement is the interesting part.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    nn = NearestNeighbors(n_neighbors=2).fit(z)
+    _, idx = nn.kneighbors(z)
+    same = family[idx[:, 1]] == family
+    return {
+        "overall": float(same.mean()),
+        "per_family": {str(f): float(same[family == f].mean())
+                       for f in sorted(set(family.tolist()))},
+    }
+
+
+def excess_silhouette(
+    z: np.ndarray, k_max: int = 15, n_null: int = 20, seed: int = 0
+) -> dict:
+    """Best silhouette minus the matched unimodal null's, plus a p-value.
+
+    The null is searched over the *same* K range as the real data, so the two
+    maxima are taken over the same number of candidates.
+    """
+    real, real_k = best_silhouette(z, k_max, seed)
+    nulls = [best_silhouette(nz, k_max, seed)[0]
+             for nz in matched_null(z, n_null, seed)]
+    return {
+        "silhouette": real, "silhouette_k": real_k,
+        "null_mean": float(np.mean(nulls)), "null_max": float(np.max(nulls)),
+        "excess": float(real - np.mean(nulls)),
+        "p_value": float(np.mean(np.array(nulls) >= real)),
+        "n_null": n_null, "k_max": k_max,
+    }
+
+
+def scale_dominance(
+    z: np.ndarray,
+    family: np.ndarray,
+    log_inertia: np.ndarray,
+    data_scale: Sequence[np.ndarray] = (),
+    k_max: int = 15,
+    n_null: int = 20,
+    seed: int = 0,
+) -> dict:
+    """How much of the latent's cluster structure is just mechanical scale?
+
+    Computes the geometry, excess-silhouette, family-agreement and purity
+    statistics on the raw latent and on scale-residualised versions of it. If the
+    excess silhouette collapses toward the matched null once a single scalar is
+    regressed out, the apparent discrete structure was that scalar.
+
+    ``data_scale`` optionally adds per-object *observed* scale covariates (e.g.
+    log RMS step size and log RMS action), which are what a filter actually sees,
+    as distinct from the ground-truth inertia it does not.
+    """
+    variants: dict[str, np.ndarray] = {
+        "raw": z,
+        "resid_log_inertia": residualise(z, [log_inertia]),
+    }
+    if len(data_scale):
+        variants["resid_data_scale"] = residualise(z, list(data_scale))
+        variants["resid_inertia_and_data_scale"] = residualise(
+            z, [log_inertia, *data_scale]
+        )
+
+    out: dict[str, dict] = {}
+    for name, zv in variants.items():
+        spec = spectrum(zv)
+        ex = excess_silhouette(zv, k_max, n_null, seed)
+        pur = nn_family_purity(zv, family)
+        n_fam = len(set(family.tolist()))
+        out[name] = {
+            "pc1_variance": float(spec["explained_variance"][0]),
+            "effective_dim": spec["effective_dim"],
+            **ex,
+            "family_agreement": family_agreement(zv, family, n_fam, seed),
+            "purity": pur,
+        }
+
+    # Which latent directions ARE the scale axis?
+    zc = z - z.mean(0)
+    u, s, _ = np.linalg.svd(zc, full_matrices=False)
+    pcs = u * s
+    covs = {"log_inertia": np.asarray(log_inertia, float)}
+    for i, c in enumerate(data_scale):
+        covs[f"data_scale_{i}"] = np.asarray(c, float)
+    out["pc_scale_correlation"] = {
+        name: [float(np.corrcoef(pcs[:, k], c)[0, 1]) for k in range(min(4, pcs.shape[1]))]
+        for name, c in covs.items()
+    }
+    base, resid = out["raw"]["excess"], out["resid_log_inertia"]["excess"]
+    out["fraction_of_excess_explained_by_inertia"] = float(
+        1.0 - resid / base) if abs(base) > 1e-12 else float("nan")
+    return out
+
+
 def family_agreement(z: np.ndarray, family: np.ndarray, k: int, seed: int = 0) -> dict:
     """Do unsupervised clusters recover the known mechanism families?
 
@@ -410,4 +537,6 @@ __all__ = [
     "project", "spectrum", "gmm_sweep", "cluster_indices", "matched_null",
     "multimodality_evidence", "family_agreement", "interpolation_profile",
     "jacobian_stats", "linearization_error", "fit_oracle_latent", "GMMResult",
+    "residualise", "best_silhouette", "nn_family_purity", "excess_silhouette",
+    "scale_dominance",
 ]
