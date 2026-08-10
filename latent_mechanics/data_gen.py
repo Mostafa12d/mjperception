@@ -43,6 +43,21 @@ SPLIT_NAMES = {SPLIT_TRAIN: "train", SPLIT_VAL: "val", SPLIT_HELDOUT_DOOR: "held
 JOINT_RANGE = (-0.17, 2.09)
 LIMIT_MARGIN = 0.05
 
+# "Moving" as a fraction of the joint's OWN speed scale. An absolute threshold
+# cannot work across joint types: 0.02 would be compared unchanged against the
+# drawer's m/s and a revolute joint's rad/s, so the reported "% moving" would not
+# be comparable between families. ``mechanisms.rollout.describe_population``
+# already used this relative rule; this is that rule, in one place.
+MOVING_FRAC_OF_P95 = 0.02
+
+
+def moving_fraction(velocity: np.ndarray) -> float:
+    """Fraction of samples moving, relative to this signal's own p95 speed."""
+    v = np.abs(np.asarray(velocity, dtype=float))
+    if v.size == 0:
+        return 0.0
+    return float((v > MOVING_FRAC_OF_P95 * max(float(np.percentile(v, 95)), 1e-9)).mean())
+
 
 @contextlib.contextmanager
 def episode_length(seconds: float):
@@ -147,7 +162,7 @@ def _run_episode(
         "theta_min": float(log["theta"].min()),
         "theta_max": float(log["theta"].max()),
         "thetadot_absmax": float(np.abs(log["theta_dot"]).max()),
-        "frac_moving": float((np.abs(log["theta_dot"]) > 0.02).mean()),
+        "frac_moving": moving_fraction(log["theta_dot"]),
         "frac_near_limit": float(tr["near_limit"].mean()),
         "max_contacts": int(log["ncon"].max()),
     }
@@ -271,8 +286,8 @@ def _print_summary(pack: dict, elapsed: float) -> None:
     print(f"  |delta thdot| : mean {np.abs(d[:, 1]).mean():.5f} rad/s  "
           f"max {np.abs(d[:, 1]).max():.5f}")
     print(f"  near joint limit: {100 * pack['near_limit'].mean():.1f}% of transitions")
-    moving = np.abs(thd) > 0.02
-    print(f"  door moving     : {100 * moving.mean():.1f}% of transitions")
+    print(f"  door moving     : {100 * moving_fraction(thd):.1f}% of transitions "
+          f"(relative to p95 speed)")
 
 
 def save_dataset(pack: dict, path: str | Path) -> Path:

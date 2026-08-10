@@ -289,6 +289,55 @@ def test_near_limit_uses_each_familys_own_range() -> None:
                   f"transitions vs {100*want.mean():5.1f}% with the true range")
 
 
+def test_moving_fraction_is_unit_invariant() -> None:
+    """A3: "% moving" must not depend on the unit the velocity is expressed in.
+
+    The old absolute ``|v| > 0.02`` was applied unchanged to the drawer's m/s and
+    the revolute families' rad/s, so the figure was not comparable across
+    families. The relative rule already used by ``describe_population`` is now
+    shared by all three call sites.
+    """
+    from latent_mechanics.data_gen import MOVING_FRAC_OF_P95, moving_fraction
+
+    print("\n'% moving' is invariant to the velocity unit")
+    rng = np.random.default_rng(0)
+    v = np.abs(rng.normal(0, 1.0, 5000))
+
+    base = moving_fraction(v)
+    for scale, label in ((1e-3, "1000x slower (e.g. m/s vs rad/s)"),
+                         (1e3, "1000x faster")):
+        check(f"rescaling the signal {label} leaves the fraction unchanged",
+              abs(moving_fraction(v * scale) - base) < 1e-12,
+              f"{base:.6f} vs {moving_fraction(v*scale):.6f}")
+
+    # The old absolute rule was NOT invariant -- confirm the test discriminates.
+    old = lambda x: float((np.abs(x) > 0.02).mean())
+    check("the old absolute rule was not unit-invariant",
+          abs(old(v * 1e-3) - old(v)) > 0.1,
+          f"{old(v):.3f} vs {old(v*1e-3):.3f}")
+
+    check("empty input is handled", moving_fraction(np.zeros(0)) == 0.0)
+    check("an all-zero signal reports nothing moving",
+          moving_fraction(np.zeros(100)) == 0.0)
+    check(f"threshold constant is the documented {MOVING_FRAC_OF_P95} of p95",
+          MOVING_FRAC_OF_P95 == 0.02)
+
+    # End to end: the three call sites agree on one real drawer episode.
+    from latent_mechanics.config import ExperimentConfig
+    from latent_mechanics.mechanisms.rollout import describe_population
+    cfg = ExperimentConfig()
+    fracs = {}
+    for fam in ("door", "drawer", "laptop"):
+        r = np.random.default_rng(7)
+        p = lib.sample_params(fam, r, 0)
+        ep = rollout_mechanism(p, cfg, 1, 3.0, cfg.sim.frame_skip, seed=7)
+        fracs[fam] = moving_fraction(ep.state[:, 1]) if len(ep) else float("nan")
+    print("        per-family moving fraction: "
+          + "  ".join(f"{k}={v:.2f}" for k, v in fracs.items()))
+    check("every family reports a moving fraction in (0, 1]",
+          all(0.0 < v <= 1.0 for v in fracs.values()), str(fracs))
+
+
 def main() -> None:
     print("latent_mechanics.mechanisms self-checks")
     test_all_families_build()
@@ -301,6 +350,7 @@ def main() -> None:
     test_earlier_stages_intact()
     test_analysis_metrics()
     test_near_limit_uses_each_familys_own_range()
+    test_moving_fraction_is_unit_invariant()
 
     print()
     if _FAILURES:

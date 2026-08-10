@@ -22,7 +22,7 @@ import numpy as np
 
 import run_door_dynamics_validation as dyn
 from latent_mechanics.config import ExperimentConfig
-from latent_mechanics.data_gen import transitions_from_log
+from latent_mechanics.data_gen import moving_fraction, transitions_from_log
 from latent_mechanics.excitation import sample_profile
 from latent_mechanics.mechanisms import library as lib
 from latent_mechanics.mechanisms.library import MechanismParams
@@ -190,7 +190,7 @@ def describe_population(pops: list[MechanismEpisodes]) -> str:
         v = np.concatenate([p.state[:, 1] for p in sub])
         a = np.concatenate([p.action[:, 0] for p in sub])
         d = np.concatenate([(p.next_state - p.state)[:, 1] for p in sub])
-        moving = float(np.mean(np.abs(v) > 0.02 * max(np.percentile(np.abs(v), 95), 1e-9)))
+        moving = moving_fraction(v)
         lines.append(f"  {fam:16s} {len(q):>7d} {np.percentile(np.abs(q), 95):>9.3f} "
                      f"{np.percentile(np.abs(v), 95):>9.3f} "
                      f"{np.sqrt((a**2).mean()):>9.3f} {moving:>6.0%}")

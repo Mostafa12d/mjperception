@@ -27,6 +27,7 @@ from latent_mechanics.data_gen import (
     SPLIT_NAMES,
     SPLIT_TRAIN,
     SPLIT_VAL,
+    moving_fraction,
 )
 
 SPLIT_CODES = {v: k for k, v in SPLIT_NAMES.items()}
@@ -211,7 +212,7 @@ class DoorTransitionDataset(Dataset):
             f"{self.path.name} [{self.split}]: {len(self)} transitions, "
             f"{len(self.door_ids)} doors, {len(self.episode_ids())} episodes, "
             f"dt_model={self.dt_model:.3f}s, "
-            f"{100 * (np.abs(thd) > 0.02).mean():.0f}% moving"
+            f"{100 * moving_fraction(thd):.0f}% moving"
         )
 
 
