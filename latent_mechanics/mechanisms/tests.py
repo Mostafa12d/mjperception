@@ -338,6 +338,71 @@ def test_moving_fraction_is_unit_invariant() -> None:
           all(0.0 < v <= 1.0 for v in fracs.values()), str(fracs))
 
 
+def test_time_resolution_matches_baseline() -> None:
+    """B3: TimeResolution(10, 1) must be a bit-exact drop-in for the current path.
+
+    ``rollout_at_resolution`` cannot reuse ``simulate_mechanism`` +
+    ``transitions_from_log`` (both read ``dyn.DT`` from module scope), so it
+    reimplements the loop with an explicit timestep. That is only safe if the
+    default resolution reproduces the existing rollout exactly -- including the
+    slicing convention, where the first recorded transition spans the end of
+    block 0 to the end of block 1 and carries block 1's action.
+    """
+    from latent_mechanics.config import ExperimentConfig
+    from latent_mechanics.mechanisms.rollout import rollout_mechanism
+    from latent_mechanics.mechanisms.time_resolution import (
+        BASELINE,
+        TimeResolution,
+        rollout_at_resolution,
+    )
+
+    print("\nTimeResolution(10, 1) reproduces the existing rollout exactly")
+    cfg = ExperimentConfig()
+    for fam in lib.FAMILY_ORDER:
+        p = lib.sample_params(fam, np.random.default_rng(3), 0)
+        a = rollout_mechanism(p, cfg, 2, 6.0, 10, seed=3)
+        b = rollout_at_resolution(p, cfg, 2, 6.0, BASELINE, seed=3)
+        if len(a) != len(b):
+            check(f"{fam}: same transition count", False, f"{len(a)} vs {len(b)}")
+            continue
+        d = max(float(np.abs(a.state - b.state).max()),
+                float(np.abs(a.action - b.action).max()),
+                float(np.abs(a.next_state - b.next_state).max()))
+        check(f"{fam}: bit-exact vs rollout_mechanism ({len(a)} transitions)",
+              d == 0.0, f"max abs diff {d:.3e}")
+
+    # Arithmetic of the two knobs.
+    base, fine = BASELINE, TimeResolution(frame_skip=2, substeps=5)
+    check("baseline dt_model is 20 ms", abs(base.dt_model - 0.02) < 1e-12)
+    check("baseline mj_dt is 2 ms", abs(base.mj_dt - 0.002) < 1e-12)
+    check("frame_skip=2 gives dt_model 4 ms", abs(fine.dt_model - 0.004) < 1e-12)
+    check("substeps=5 gives mj_dt 0.4 ms", abs(fine.mj_dt - 0.0004) < 1e-12)
+    check("mj steps per transition is frame_skip * substeps",
+          fine.mj_steps_per_transition == 10)
+
+    # A finer recording really does produce more, shorter-interval transitions.
+    p = lib.sample_params("laptop", np.random.default_rng(3), 0)
+    coarse = rollout_at_resolution(p, cfg, 1, 6.0, BASELINE, seed=3)
+    finer = rollout_at_resolution(p, cfg, 1, 6.0,
+                                  TimeResolution(frame_skip=2, substeps=1), seed=3)
+    check("finer dt yields more transitions per episode", len(finer) > len(coarse),
+          f"{len(coarse)} vs {len(finer)}")
+    if len(coarse) and len(finer):
+        dq_c = float(np.abs(coarse.next_state[:, 0] - coarse.state[:, 0]).mean())
+        dq_f = float(np.abs(finer.next_state[:, 0] - finer.state[:, 0]).mean())
+        check("and a smaller mean step in the observed coordinate", dq_f < dq_c,
+              f"{dq_c:.5f} vs {dq_f:.5f}")
+
+    # The override map must be inert on import.
+    from latent_mechanics.mechanisms.time_resolution import (
+        FRAME_SKIP_OVERRIDES,
+        resolution_for,
+    )
+    check("no family is overridden by default", FRAME_SKIP_OVERRIDES == {})
+    check("resolution_for falls back to the baseline",
+          resolution_for("laptop") == BASELINE)
+
+
 def main() -> None:
     print("latent_mechanics.mechanisms self-checks")
     test_all_families_build()
@@ -351,6 +416,7 @@ def main() -> None:
     test_analysis_metrics()
     test_near_limit_uses_each_familys_own_range()
     test_moving_fraction_is_unit_invariant()
+    test_time_resolution_matches_baseline()
 
     print()
     if _FAILURES:
