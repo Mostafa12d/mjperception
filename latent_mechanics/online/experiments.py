@@ -55,7 +55,9 @@ class Context:
         self.cfg = cfg
         self.device = torch.device(exp.device)
 
-        model, table, stage1_cfg, extra = load_checkpoint(exp.checkpoint, device=self.device)
+        model, table, stage1_cfg, extra = load_checkpoint(
+            exp.checkpoint, device=self.device, stage="stage3_online",
+            expected_sha256=exp.expected_sha256)
         if table is None:
             raise ValueError("checkpoint has no embedding table; needed for init strategies")
         self.model = model.freeze()

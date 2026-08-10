@@ -74,7 +74,8 @@ def adapt_on_heldout(
     init_name: str = "medoid",
 ) -> list[dict]:
     """Run every method on every held-out instance of a trained checkpoint."""
-    model, table, stage1_cfg, extra = load_checkpoint(ckpt, device=device)
+    model, table, stage1_cfg, extra = load_checkpoint(
+        ckpt, device=device, stage=f"stage4_mechanisms:{ckpt.parent.name}")
     model.freeze()
     train_latents = table.weight.detach().cpu().numpy()
     init = init_strategies(train_latents, 0)[init_name]

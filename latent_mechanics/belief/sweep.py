@@ -141,7 +141,7 @@ def main() -> None:
     print("Step 0/2 -- fixed latent basis")
     basis = load_or_create(out / "latent_basis.npz", PREDICTOR, n_components=8)
     print(basis.summary())
-    model, table, _, _ = load_checkpoint(PREDICTOR, device="cpu")
+    model, table, _, _ = load_checkpoint(PREDICTOR, device="cpu", stage="belief_ukf:sweep")
     model.freeze()
     train_z = table.weight.detach().cpu().numpy().astype(np.float64)
     for d in dims:

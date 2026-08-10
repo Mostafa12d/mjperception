@@ -30,6 +30,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
+from latent_mechanics import provenance
 from latent_mechanics.config import ExperimentConfig, load_config
 from latent_mechanics.dataset import DoorTransitionDataset
 from latent_mechanics.model import (
@@ -325,6 +326,11 @@ def train(cfg: ExperimentConfig, data_path: str | None = None) -> Path:
         f"best val loss {best_val:.6f} at epoch {best_epoch + 1}"
     )
     print(f"checkpoints: {run_dir / 'best.pt'} , {run_dir / 'last.pt'}")
+    # Record the identity of what was just produced, so a downstream stage's
+    # provenance line can be matched back to the run that created it.
+    provenance.log_checkpoint(run_dir / "best.pt",
+                              stage=f"trained:{cfg.train.run_name}",
+                              table_rows=getattr(embeddings, "num_doors", None))
     print(f"tensorboard: tensorboard --logdir {cfg.train.run_dir}")
     return run_dir / "best.pt"
 

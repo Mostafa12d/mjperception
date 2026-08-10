@@ -359,7 +359,7 @@ def run(out: Path, k_max: int = 15, n_null: int = 20, epochs: int = 40) -> dict:
     figure_scale_dominance(sd, out)
 
     # ---- shared model + data for steps 4-6 -----------------------------
-    model, table, _, _ = load_checkpoint(ckpt, device="cpu")
+    model, table, _, _ = load_checkpoint(ckpt, device="cpu", stage="geometry_report")
     model.freeze()
     tr = DoorTransitionDataset(npz, "train", exclude_near_limit=False)
     held = DoorTransitionDataset(npz, "heldout_door", exclude_near_limit=False)

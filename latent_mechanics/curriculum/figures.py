@@ -96,7 +96,7 @@ def analyse_level_latents(out: Path, level_index: int, name: str) -> dict | None
     npz = out / f"data_L{level_index}.npz"
     if not ckpt.exists() or not npz.exists():
         return None
-    _, table, _, _ = load_checkpoint(ckpt)
+    _, table, _, _ = load_checkpoint(ckpt, stage=f"stage5_curriculum:L{level_index}_{name}")
     z = table.weight.detach().cpu().numpy()
     with np.load(npz, allow_pickle=False) as a:
         fams = np.array([str(x) for x in a["mechanism_family"]])[: len(z)]

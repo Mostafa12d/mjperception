@@ -49,6 +49,10 @@ class RLSConfig:
 @dataclass
 class ExperimentsConfig:
     checkpoint: str = "runs/latent_mechanics/base/best.pt"
+    # Optional pin on the frozen predictor's sha256 (full hash or any leading
+    # prefix). Set it to make a substituted checkpoint fail loudly instead of
+    # silently changing what the reported numbers mean.
+    expected_sha256: str | None = None
     data: str = "data/door_mechanics.npz"
     split: str = "heldout_door"
     # Doors to run. Empty means every door in the split.

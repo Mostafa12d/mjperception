@@ -27,6 +27,7 @@ from typing import Any
 import torch
 import torch.nn as nn
 
+from latent_mechanics import provenance
 from latent_mechanics.config import ExperimentConfig, ModelConfig, config_from_dict
 
 STATE_DIM = 2  # [door_angle (rad), door_velocity (rad/s)]
@@ -320,13 +321,23 @@ def save_checkpoint(
 
 
 def load_checkpoint(
-    path: str | Path, device: str | torch.device = "cpu", with_embeddings: bool = True
+    path: str | Path,
+    device: str | torch.device = "cpu",
+    with_embeddings: bool = True,
+    stage: str = "unlabelled",
+    expected_sha256: str | None = None,
 ) -> tuple[MechanicsDynamicsModel, DoorEmbeddingTable | None, ExperimentConfig, dict]:
     """Load a checkpoint.
 
     Stage-2 usage is ``load_checkpoint(p, with_embeddings=False)`` followed by
     ``model.freeze()`` -- the table is training scaffolding, not part of the
     method.
+
+    Every load records the file's sha256 via ``provenance.log_checkpoint``, so
+    which frozen predictor produced a result is visible in that result's own log
+    rather than something to be reconstructed afterwards. ``stage`` names the
+    caller; ``expected_sha256`` (a full hash or a leading prefix) turns a silent
+    substitution into a hard failure.
     """
     payload = torch.load(path, map_location=device, weights_only=False)
     model = MechanicsDynamicsModel(**payload["model_kwargs"])
@@ -338,6 +349,10 @@ def load_checkpoint(
         table = DoorEmbeddingTable(**payload["embedding_kwargs"])
         table.load_state_dict(payload["embedding_state"])
         table.to(device)
+
+    kwargs = payload.get("embedding_kwargs") or {}
+    provenance.log_checkpoint(path, stage=stage, expected_sha256=expected_sha256,
+                              table_rows=kwargs.get("num_doors"))
 
     cfg = config_from_dict(payload["config"])
     return model, table, cfg, payload.get("extra", {})

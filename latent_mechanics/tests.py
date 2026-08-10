@@ -276,6 +276,76 @@ def test_rollout_shapes() -> None:
     check("limit windows are excluded", len(pred2) == 6, str(len(pred2)))
 
 
+def test_checkpoint_provenance(cfg: ExperimentConfig) -> None:
+    """A5: loading a predictor must record its hash, and a pin must be enforced."""
+    import tempfile
+
+    from latent_mechanics import provenance
+    from latent_mechanics.model import (
+        DoorEmbeddingTable,
+        build_model_from_config,
+        load_checkpoint,
+        save_checkpoint,
+    )
+
+    print("\nCheckpoint provenance is recorded and pinnable")
+    stats = {
+        "state_mean": torch.zeros(2), "state_std": torch.ones(2),
+        "action_mean": torch.zeros(1), "action_std": torch.ones(1),
+        "delta_mean": torch.zeros(2), "delta_std": torch.ones(2),
+    }
+    model = build_model_from_config(cfg.model, stats)
+    table = DoorEmbeddingTable(num_doors=7, embed_dim=cfg.model.embed_dim)
+
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "best.pt"
+        save_checkpoint(p, model, table, cfg)
+
+        digest = provenance.file_sha256(p)
+        check("sha256 is a 64-char hex digest",
+              len(digest) == 64 and all(c in "0123456789abcdef" for c in digest))
+        check("hashing is stable across calls", provenance.file_sha256(p) == digest)
+
+        provenance.set_quiet(True)
+        try:
+            _, t, _, _ = load_checkpoint(p, stage="unit_test")
+            check("load records the stage and hash",
+                  provenance.loaded().get("unit_test", ("", ""))[0] == digest)
+            check("recorded table_rows matches the saved table", t.num_doors == 7)
+
+            # A correct pin, full and truncated, must pass.
+            load_checkpoint(p, stage="unit_test", expected_sha256=digest)
+            load_checkpoint(p, stage="unit_test", expected_sha256=digest[:16])
+            check("a matching pin (full and 16-char prefix) is accepted", True)
+
+            # A wrong pin must raise, not warn.
+            raised = False
+            try:
+                load_checkpoint(p, stage="unit_test", expected_sha256="deadbeef")
+            except ValueError:
+                raised = True
+            check("a mismatched pin raises ValueError", raised)
+
+            # Changing the file changes the hash, so substitution is detectable.
+            table2 = DoorEmbeddingTable(num_doors=9, embed_dim=cfg.model.embed_dim)
+            save_checkpoint(p, model, table2, cfg)
+            check("a different checkpoint at the same path hashes differently",
+                  provenance.file_sha256(p) != digest)
+            raised = False
+            try:
+                load_checkpoint(p, stage="unit_test", expected_sha256=digest)
+            except ValueError:
+                raised = True
+            check("the old pin now rejects the substituted checkpoint", raised)
+        finally:
+            provenance.set_quiet(False)
+
+    # Every stage in the provenance table must name a real source.
+    for stage, source, pattern in provenance.STAGE_SOURCES:
+        check(f"provenance table entry '{stage}' names its source",
+              bool(stage and source and pattern))
+
+
 def main() -> None:
     print("latent_mechanics self-checks")
     cfg = load_config(None)
@@ -286,6 +356,7 @@ def main() -> None:
     test_data_pipeline(cfg)
     test_transition_fidelity()
     test_rollout_shapes()
+    test_checkpoint_provenance(cfg)
 
     print()
     if _FAILURES:

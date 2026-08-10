@@ -88,7 +88,7 @@ class LatentDataset:
 
 def extract_from_checkpoint(ckpt: str | Path, data_npz: str | Path) -> LatentDataset:
     """Copy one checkpoint's embedding table out, with metadata attached."""
-    _, table, _, _ = load_checkpoint(ckpt, device="cpu")
+    _, table, _, _ = load_checkpoint(ckpt, device="cpu", stage="geometry_report:extract")
     if table is None:
         raise ValueError(f"{ckpt} has no embedding table")
     z = table.weight.detach().cpu().numpy().copy()

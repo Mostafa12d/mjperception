@@ -102,7 +102,8 @@ def main() -> None:
     stage1_cfg = load_stage1_config("configs/latent_mechanics.yaml")
     oc = load_online_config("configs/online_adaptation.yaml").adaptor
 
-    model, table, _, _ = load_checkpoint(DEFAULT_TABLE, device="cpu")
+    model, table, _, _ = load_checkpoint(DEFAULT_TABLE, device="cpu",
+                                         stage="belief_ukf:drift_check")
     model.freeze()
     train_z = table.weight.detach().cpu().numpy().astype(np.float64)
     basis = load_or_create(out / "latent_basis.npz", DEFAULT_TABLE, n_components=8)

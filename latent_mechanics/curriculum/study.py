@@ -157,7 +157,8 @@ def evaluate_level(
     with_rls: bool = False, device="cpu",
 ) -> list[dict]:
     """Adapt on every instance of the fixed suite and score it."""
-    model, table, _, _ = load_checkpoint(ckpt, device=device)
+    model, table, _, _ = load_checkpoint(ckpt, device=device,
+                                         stage=f"stage5_curriculum:{ckpt.parent.name}")
     model.freeze()
     init = init_strategies(table.weight.detach().cpu().numpy(), 0)[cc.latent_init]
     ds = DoorTransitionDataset(npz, "heldout_door", exclude_near_limit=False)

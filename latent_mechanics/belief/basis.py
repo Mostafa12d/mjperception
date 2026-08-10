@@ -154,7 +154,7 @@ def compute_basis(table_ckpt: str = DEFAULT_TABLE, n_components: int = 8) -> Lat
     """
     from latent_mechanics.model import load_checkpoint
 
-    _, table, _, _ = load_checkpoint(table_ckpt, device="cpu")
+    _, table, _, _ = load_checkpoint(table_ckpt, device="cpu", stage="belief_ukf:basis")
     if table is None:
         raise ValueError(f"{table_ckpt} has no embedding table")
     z = table.weight.detach().cpu().numpy().astype(np.float64)
