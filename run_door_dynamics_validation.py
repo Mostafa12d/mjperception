@@ -88,9 +88,10 @@ def load_model(
     density: float = DEFAULT_DENSITY,
     frictionloss: float = DEFAULT_FRICTIONLOSS,
     damping: float = DEFAULT_DAMPING,
+    model_path: str = MODEL_PATH,
 ) -> mujoco.MjModel:
-    """Load door.xml and override mass-scale / joint friction / damping."""
-    model = mujoco.MjModel.from_xml_path(MODEL_PATH)
+    """Load a door XML and override mass-scale / joint friction / damping."""
+    model = mujoco.MjModel.from_xml_path(model_path)
     bid = model.body("door").id
     scale = density / DEFAULT_DENSITY
     model.body_mass[bid] *= scale

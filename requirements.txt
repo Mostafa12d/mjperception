@@ -1,0 +1,34 @@
+# mjperception — main environment (Python 3.10)
+#
+#   python3.10 -m venv .venv && source .venv/bin/activate
+#   pip install -r requirements.txt
+#
+# Versions are pinned to the set this project was developed and validated
+# against. The OMIP kinematic-structure script needs a *separate* Python 3.12
+# environment -- see requirements-omip.txt.
+
+# --- simulation -------------------------------------------------------------
+mujoco==3.10.0
+mujoco-python-viewer==0.1.4    # imported as `mujoco_viewer`; interactive windows
+glfw==2.8.0                    # window/key handling in live_flowbot3d_view.py
+
+# --- numerics ---------------------------------------------------------------
+numpy==1.25.2
+scipy==1.9.3                   # savgol_coeffs, used by park/run_door_noise_savgol.py
+
+# --- learning (latent_mechanics/) -------------------------------------------
+torch==2.8.0
+PyYAML==6.0.3                  # configs/*.yaml
+tensorboard==2.13.0            # torch.utils.tensorboard writer in train.py
+
+# --- figures, video, images -------------------------------------------------
+matplotlib==3.10.8
+imageio==2.37.3
+imageio-ffmpeg==0.6.0          # mp4 writing
+pillow==12.2.0                 # HUD overlay in run_door_kinematic_estimation.py
+
+# --- optional: latent-space embedding plots (Stage 4 analysis) --------------
+# latent_mechanics/mechanisms/analysis.py imports these lazily and falls back
+# to PCA if they are missing.
+umap-learn==0.5.12
+scikit-learn==1.7.2

@@ -1,0 +1,19 @@
+# mjperception — OMIP environment (Python 3.12 ONLY)
+#
+# Used solely by run_door_kinematic_estimation.py, which imports `omip_core`,
+# a locally built pybind11 extension compiled against CPython 3.12. It cannot
+# be loaded from the 3.10 environment above.
+#
+#   python3.12 -m venv .venv-omip
+#   .venv-omip/bin/pip install -r requirements-omip.txt
+#
+# `omip_core` and `omip_mujoco_wrapper` are NOT pip-installable. They are found
+# on sys.path from a sibling checkout of the omip repo; override the location
+# with the OMIP_REPO_ROOT environment variable. See docs section "OMIP".
+
+mujoco==3.10.0
+numpy==2.5.1
+matplotlib==3.11.1
+imageio==2.37.4
+imageio-ffmpeg==0.6.0
+pillow==12.3.0

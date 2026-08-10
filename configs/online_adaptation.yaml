@@ -1,0 +1,46 @@
+# Stage 2: online latent adaptation on unseen doors.
+#
+# Only keys that differ from latent_mechanics/online/config.py need to appear.
+
+adaptor:
+  lr: 0.03
+  optimizer: adam
+  # Gradient steps per observed transition.
+  n_inner_steps: 1
+  # Bounded sliding window of recent transitions used by each update. 1 is pure
+  # single-sample online SGD; larger values stay online (constant cost per
+  # update, no trajectory revisited) but cut gradient noise. See README.
+  window: 32
+  # L2 pull toward the initial latent; the slot where a Bayesian prior enters.
+  prior_weight: 0.0
+  loss_space: normalized
+  max_grad_norm: 0.0
+  # Robbins-Monro decay: lr_t = lr / (1 + lr_decay * t). Without it the belief
+  # jitters and adaptation from a good init is a net loss. See README.
+  lr_decay: 3.0e-3
+
+rls:
+  lam: 0.995
+  delta: 1000.0
+  vel_thresh: 0.02
+  n_substeps: 10
+  # 5 = spring-aware regressor (fair to RLS on spring-loaded doors)
+  # 3 = the Stage-1 baseline's own regressor, for reference
+  n_params: [5, 3]
+
+experiments:
+  checkpoint: runs/latent_mechanics/base/best.pt
+  data: data/door_mechanics.npz
+  split: heldout_door
+  # Init for Experiment 1 and the animation; Experiment 2 compares all four.
+  default_init: zero
+  door_ids: []          # empty = every unseen door
+  max_episodes: null    # null = all episodes for the door
+  focus_door: null      # null = first door; used for the per-door figures
+  rolling_window: 200
+  seed: 0
+  out_dir: runs/latent_mechanics/base/online
+  device: cpu
+  make_animation: true
+  animation_stride: 20
+  animation_fps: 20

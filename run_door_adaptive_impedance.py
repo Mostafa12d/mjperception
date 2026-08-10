@@ -27,6 +27,9 @@ import matplotlib.pyplot as plt
 from run_door_dynamics_validation import (
     DT,
     HANDLE_DIST,
+    DEFAULT_DENSITY,
+    DEFAULT_FRICTIONLOSS,
+    DEFAULT_DAMPING,
     load_model,
     true_hinge_inertia,
     hinge_torque_from_handle_force,
@@ -62,6 +65,11 @@ T_RAMP = 5.0
 # Keeps net opening monotonic while injecting θ̈ for RLS.
 DITHER_AMP = 2.5          # N·m  (small vs creep/impedance torques)
 DITHER_FREQ = 2.0         # Hz   (fast shimmer, not a visible swing)
+
+# trace(P)-gated dither fade: once RLS covariance shrinks below this,
+# ramp the dither amplitude down to 0 (linearly) instead of running all episode.
+TRACE_P_THRESH = 1.0
+RAMP_DURATION = 0.2       # s, linear ramp-down once gate trips (no hard cutoff)
 
 
 def reference_smooth(t: float) -> tuple[float, float, float]:
@@ -99,8 +107,22 @@ def impedance_torque(
     return float(np.clip(tau, -TAU_MAX, TAU_MAX))
 
 
-def run_condition(excited: bool, video_path: str) -> dict:
-    model = load_model()
+def run_condition(
+    excited: bool,
+    video_path: str,
+    *,
+    model_path: str = "door.xml",
+    handle_dist: float = HANDLE_DIST,
+    density: float = DEFAULT_DENSITY,
+    frictionloss: float = DEFAULT_FRICTIONLOSS,
+    damping: float = DEFAULT_DAMPING,
+    i_hat_init: float = I_HAT_INIT,
+    mu_hat_init: float = MU_HAT_INIT,
+    log_path: str | None = None,
+) -> dict:
+    model = load_model(
+        density=density, frictionloss=frictionloss, damping=damping, model_path=model_path,
+    )
     data = mujoco.MjData(model)
     gt = true_hinge_inertia(model)
     I_true = gt["I_hinge"]
@@ -111,7 +133,8 @@ def run_condition(excited: bool, video_path: str) -> dict:
     door_bid = model.body("door").id
 
     rls = rls_init(2, delta=1e3, lam=RLS_LAM)
-    rls.theta[:] = [I_HAT_INIT, MU_HAT_INIT]
+    rls.theta[:] = [i_hat_init, mu_hat_init]
+    mu_true = gt["frictionloss"]
 
     t = np.arange(N_STEPS) * DT
     theta = np.zeros(N_STEPS)
@@ -122,6 +145,12 @@ def run_condition(excited: bool, video_path: str) -> dict:
     I_hat_log = np.zeros(N_STEPS)
     mu_hat_log = np.zeros(N_STEPS)
     track_err = np.zeros(N_STEPS)
+    trace_P_log = np.zeros(N_STEPS)
+    dither_amp_log = np.zeros(N_STEPS)
+
+    # trace(P)-gated dither fade state (excited condition only)
+    a_tau_current = DITHER_AMP
+    gate_tripped_t: float | None = None
 
     renderer = mujoco.Renderer(model, height=480, width=640)
     frames = []
@@ -134,7 +163,7 @@ def run_condition(excited: bool, video_path: str) -> dict:
 
         if excited:
             th_d, thd_d, thdd_d = reference_smooth(t[i])
-            dither = DITHER_AMP * np.sin(2.0 * np.pi * DITHER_FREQ * t[i])
+            dither = a_tau_current * np.sin(2.0 * np.pi * DITHER_FREQ * t[i])
             tau = impedance_torque(
                 th, thd, th_d, thd_d, thdd_d, I_hat, mu_hat, dither=dither
             )
@@ -143,7 +172,7 @@ def run_condition(excited: bool, video_path: str) -> dict:
             th_d, thd_d, thdd_d = th, 0.0, 0.0
             tau = CREEP_TORQUE
 
-        force = (tau / HANDLE_DIST) * tangential_direction(th)
+        force = (tau / handle_dist) * tangential_direction(th)
         hinge_pos = data.xpos[door_bid].copy()
         hinge_axis = data.xmat[door_bid].reshape(3, 3)[:, 2].copy()
         handle_pos = data.site_xpos[handle_sid].copy()
@@ -169,6 +198,8 @@ def run_condition(excited: bool, video_path: str) -> dict:
             if rls.theta[0] < 0.1:
                 rls.theta[0] = 0.1
 
+        trace_P = float(np.trace(rls.P))
+
         theta[i] = th_new
         theta_dot[i] = thd_new
         theta_ddot[i] = thdd_new
@@ -177,6 +208,17 @@ def run_condition(excited: bool, video_path: str) -> dict:
         I_hat_log[i] = float(rls.theta[0])
         mu_hat_log[i] = float(rls.theta[1])
         track_err[i] = (th_d - th_new) if excited else 0.0
+        trace_P_log[i] = trace_P
+        dither_amp_log[i] = a_tau_current if excited else 0.0
+
+        # trace(P)-gated dither fade: once the gate trips, ramp A_tau to 0
+        # linearly over RAMP_DURATION instead of cutting it off.
+        if excited:
+            if gate_tripped_t is None and trace_P < TRACE_P_THRESH:
+                gate_tripped_t = t[i]
+            if gate_tripped_t is not None:
+                ramp_frac = (t[i] - gate_tripped_t) / RAMP_DURATION
+                a_tau_current = DITHER_AMP * max(0.0, 1.0 - ramp_frac)
 
         if i % RENDER_EVERY == 0:
             renderer.update_scene(data, camera="view")
@@ -184,6 +226,9 @@ def run_condition(excited: bool, video_path: str) -> dict:
 
     renderer.close()
     imageio.mimsave(video_path, frames, fps=FPS, format="FFMPEG")
+
+    I_err_log = I_hat_log - I_true
+    mu_err_log = mu_hat_log - mu_true
 
     I_final = float(I_hat_log[-1])
     rel_err = abs(I_final - I_true) / I_true * 100.0
@@ -202,6 +247,30 @@ def run_condition(excited: bool, video_path: str) -> dict:
                 conv_t = i * DT
                 break
 
+    # dither-fade gate summary (excited condition only)
+    zero_mask = dither_amp_log <= 1e-9
+    a_tau_zero_t = float(t[np.argmax(zero_mask)]) if (excited and zero_mask.any()) else None
+    rmse_post_gate = float("nan")
+    if excited and gate_tripped_t is not None:
+        post_mask = t >= gate_tripped_t
+        if np.any(post_mask):
+            rmse_post_gate = float(np.sqrt(np.mean(track_err[post_mask] ** 2)))
+
+    if excited:
+        if log_path is None:
+            log_path = "adaptive_impedance_dither_log.csv"
+        header = "t,trace_P,A_tau,I_hat,mu_hat,I_err,mu_err,theta,theta_dot,tracking_error"
+        np.savetxt(
+            log_path,
+            np.column_stack(
+                [t, trace_P_log, dither_amp_log, I_hat_log, mu_hat_log,
+                 I_err_log, mu_err_log, theta, theta_dot, track_err]
+            ),
+            delimiter=",",
+            header=header,
+            comments="",
+        )
+
     label = "excited" if excited else "quasi-static"
     print(f"=== adaptive impedance: {label} ===")
     print(f"  Saved {len(frames)} frames → {video_path}")
@@ -211,6 +280,14 @@ def run_condition(excited: bool, video_path: str) -> dict:
     if excited:
         print(f"  tracking RMSE={rmse_track:.4f} rad")
         print(f"  velocity reversals during open: {100 * frac_back:.1f}% of samples")
+        if gate_tripped_t is not None:
+            print(f"  trace(P) gate tripped at t={gate_tripped_t:.3f}s")
+        else:
+            print("  trace(P) gate never tripped")
+        if a_tau_zero_t is not None:
+            print(f"  A_tau reached 0 at t={a_tau_zero_t:.3f}s")
+        print(f"  post-gate tracking RMSE={rmse_post_gate:.4f} rad")
+        print(f"  log → {log_path}")
     if conv_t is not None:
         print(f"  Î entered <10% error at t≈{conv_t:.2f}s")
     else:
@@ -228,6 +305,7 @@ def run_condition(excited: bool, video_path: str) -> dict:
         mu_hat=mu_hat_log,
         track_err=track_err,
         I_true=I_true,
+        mu_true=mu_true,
         rel_err=rel_err,
         rmse_track=rmse_track,
         thdd_rms=thdd_rms,
@@ -235,6 +313,13 @@ def run_condition(excited: bool, video_path: str) -> dict:
         conv_t=conv_t,
         label=label,
         excited=excited,
+        trace_P=trace_P_log,
+        dither_amp=dither_amp_log,
+        I_err=I_err_log,
+        mu_err=mu_err_log,
+        gate_tripped_t=gate_tripped_t,
+        a_tau_zero_t=a_tau_zero_t,
+        rmse_post_gate=rmse_post_gate,
     )
 
 

@@ -1,0 +1,75 @@
+# Stage-1 latent mechanics embedding: (state, action, z) -> next_state
+#
+# Only keys you want to change from latent_mechanics/config.py need to appear
+# here; everything else falls back to the dataclass defaults.
+
+doors:
+  n_train_doors: 48
+  # Never trained on. Reserved so stage-2 online embedding optimisation has
+  # genuinely unseen mechanics available from day one.
+  n_heldout_doors: 8
+  model_paths: ["door.xml"]
+  density_range: [200.0, 1400.0]      # kg/m^3 -> hinge inertia
+  frictionloss_range: [0.5, 6.0]      # N*m Coulomb friction
+  damping_range: [0.02, 1.5]          # N*m*s/rad viscous damping
+  stiffness_range: [0.0, 8.0]         # N*m/rad torsional spring (door closer)
+  springref_range: [-0.1, 0.6]        # rad spring rest angle
+  frac_no_spring: 0.3
+
+excitation:
+  # 'swing' is the profile that supplies closing-direction data: a slow,
+  # large-amplitude oscillation that carries the door open and back shut.
+  profile_weights: {multisine: 0.3, steps: 0.2, chirp: 0.2, swing: 0.3}
+  bias_over_friction_range: [0.6, 2.0]
+  amp_range: [1.0, 7.0]
+  freq_range: [0.2, 3.0]
+  n_sines_range: [2, 4]
+  step_hold_range: [0.2, 1.2]
+  swing_over_friction_range: [1.4, 3.5]
+  swing_freq_range: [0.15, 0.5]
+  tau_clip: 30.0
+
+sim:
+  episode_seconds: 6.0
+  episodes_per_door: 8
+  frame_skip: 10                      # dt_model = 0.002 * 10 = 0.02 s (50 Hz)
+  val_episodes_per_door: 2            # held-out episodes from the SAME doors
+  seed: 0
+  out_path: data/door_mechanics.npz
+  # Load-time filter, no regeneration needed. Joint-limit transitions carry a
+  # constraint torque that is not part of the action; left in, they supply ~90%
+  # of the squared error and swamp the mechanics signal.
+  exclude_near_limit: true
+
+model:
+  embed_dim: 16
+  hidden_sizes: [256, 256]
+  activation: silu
+  predict_delta: true
+  dropout: 0.0
+  embedding_init_std: 0.1
+
+train:
+  epochs: 60
+  batch_size: 1024
+  lr: 1.0e-3
+  embedding_lr: 1.0e-2
+  weight_decay: 1.0e-5
+  embedding_weight_decay: 1.0e-4
+  grad_clip: 1.0
+  lr_schedule: cosine
+  warmup_epochs: 1
+  device: auto
+  seed: 0
+  loss_space: normalized
+  rollout_eval_every: 10
+  rollout_eval_horizon: 50
+  rollout_eval_episodes: 16
+  early_stop_patience: 0
+  run_dir: runs/latent_mechanics
+  run_name: base
+
+eval:
+  horizons: [1, 5, 10, 25, 50, 100]
+  n_plot_episodes: 6
+  out_dir: runs/latent_mechanics/base/eval

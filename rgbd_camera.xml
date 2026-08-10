@@ -1,0 +1,23 @@
+<mujocoinclude>
+  <!-- RGB-D camera. Pose comes entirely from the parent body this file is
+       included into — do not add pos/quat here.
+
+       Usage today (see camera_scene.xml):
+         <body name="camera_mount" pos="..." xyaxes="...">
+           <include file="rgbd_camera.xml"/>
+         </body>
+
+       To mount this on a robot later, include it inside a robot link body
+       instead of a free-standing mount, e.g. inside kuka_iiwa_14's link7
+       body for a wrist-mounted camera:
+         <body name="link7" ...>
+           ...
+           <body name="wrist_camera_mount" pos="0.05 0 0.02">
+             <include file="rgbd_camera.xml"/>
+           </body>
+         </body>
+
+       fovy=58 approximates a typical RGB-D sensor's RGB stream (e.g.
+       RealSense D435); resolution 640x480 matches common depth output. -->
+  <camera name="rgbd" fovy="58" resolution="640 480"/>
+</mujocoinclude>

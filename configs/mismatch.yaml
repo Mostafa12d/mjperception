@@ -1,0 +1,25 @@
+# Stage 3: robustness to model mismatch.
+#
+# Severity levels live in latent_mechanics/mismatch/config.py (default_sweeps),
+# where each mismatch mechanism is one Sweep entry. Add a mechanism by adding a
+# PlantPerturbation subclass and one Sweep -- nothing is hard-coded in the
+# simulator or the study driver.
+
+checkpoint: runs/latent_mechanics/base/best.pt
+stage1_config: configs/latent_mechanics.yaml
+online_config: configs/online_adaptation.yaml
+
+# Unseen doors, regenerated deterministically from the Stage-1 sampler.
+n_doors: 8
+episodes_per_door: 5
+episode_seconds: 6.0
+frame_skip: 10
+seed: 0
+
+# Empty runs all eight sweeps; e.g. [stribeck, drift] runs a subset.
+only: []
+
+latent_init: medoid
+rolling_window: 200
+out_dir: runs/latent_mechanics/base/mismatch
+device: cpu

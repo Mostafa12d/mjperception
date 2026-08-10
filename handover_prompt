@@ -1,0 +1,297 @@
+I am a robotics researcher working toward an ICRA 2027 submission (journal 
+fallback) on online kinematic and inertial parameter estimation for 
+articulated object manipulation, specifically revolute-jointed objects 
+(doors, cabinets, appliances). My advisor and a postdoctoral mentor are 
+key stakeholders.
+
+---
+
+## Core Research Claim
+
+Existing online interactive perception systems (Martín-Martín & Brock 
+IJRR 2019, Buchanan et al. Autonomous Robots) estimate kinematics and 
+Coulomb friction but explicitly assume inertial dynamics are negligible. 
+This is not an oversight — it is a direct physical consequence of 
+quasi-static interaction, which makes inertial parameters (mass m, center 
+of mass CoM, inertia tensor I) structurally unobservable. Specifically:
+
+    τ = I·θ̈ + μ·sign(θ̇)
+
+Under quasi-static motion θ̈ ≈ 0, so I disappears from the signal 
+entirely regardless of estimator sophistication. This is an 
+information-theoretic result, not a modeling choice.
+
+The proposed solution: an online estimator that jointly recovers kinematic 
+AND inertial parameters by fusing proprioception + wrist F/T through 
+deliberately, minimally, safely non-quasi-static interaction — feeding an 
+adaptive impedance controller that generalizes to unseen objects without 
+hand-tuning.
+
+---
+
+## Key Differentiators from Prior Work
+
+vs. Martín-Martín & Brock: they estimate stiction + kinetic friction only 
+under quasi-static assumption — inertia explicitly assumed negligible in 
+their own words. No mass, CoM, or inertia tensor estimated.
+
+vs. Buchanan et al.: F/T used only geometrically to disambiguate joint 
+type (revolute vs prismatic) — never to estimate a physical parameter. 
+Hand-tuned force ceiling per object flagged as their own limitation.
+
+vs. Endres, Trinkle & Burgard (IROS 2013) — closest prior art, must 
+engage directly:
+  1. They estimate a lumped scalar moment of inertia only — not decomposed 
+     m, CoM, I
+  2. Offline per-door learning from prior swings of the same door — not 
+     online generalization
+  3. Assumes kinematics already known from a separate method (Sturm et al.)
+  4. No controller coupling — model used for open-loop swing planning only
+
+vs. Karayiannidis et al.: explicitly assumes negligible door inertial 
+dynamics — a named, citable limitation.
+
+---
+
+## The Physical Model Being Fitted
+
+Newton-Euler for a revolute hinge:
+
+    τ(t) = I·θ̈(t) + μ·sign(θ̇(t))
+
+Written as a linear regression at each timestep k:
+
+    τ_k = φ_k^T · π
+
+where:
+    φ_k = [θ̈_k, sign(θ̇_k)]^T    (regressor, built from measurements)
+    π = [I, μ]^T                   (unknown parameters)
+
+This is linear-in-parameters → unique global solution, no local minima. 
+RLS (Recursive Least Squares) solves it online with updates every 2ms.
+
+Identifiability requires the information matrix to be full rank:
+
+    Φ = Σ φ_k φ_k^T = [[Σθ̈_k², Σθ̈_k·sign(θ̇_k)],
+                         [Σθ̈_k·sign(θ̇_k), N]]
+
+Quasi-static: Σθ̈_k² ≈ 0 → rank 1 → I unobservable (condition number ~1116)
+Excited:      Σθ̈_k² > 0 → rank 2 → both I and μ identifiable (cond ~2.6)
+
+I and μ are nearly orthogonal in the regression because θ̈ oscillates 
+around zero (mean ≈ 0) while sign(θ̇) ≈ +1 throughout opening — their 
+inner product ≈ 0. This means a wrong friction guess has almost no effect 
+on the inertia estimate.
+
+---
+
+## Excitation Signal
+
+A small torque dither layered on top of the impedance controller:
+
+    τ_cmd = Î·θ̈_d + μ̂·sign(θ̇) + Kp·e + Kd·ė + A_τ·sin(2πft)
+
+Parameters used: A_τ = 2.5 N·m, f = 2.0 Hz
+The task stays monotonic (door opens smoothly), zero velocity reversals.
+
+---
+
+## Sensing Architecture: Two Modalities
+
+BLIND MODALITY (proprioception + F/T):
+- Arm joint encoders → forward kinematics → door angle θ(t)
+  θ(t) = atan2(p_y - h_y, p_x - h_x)
+  where p = handle position, h = hinge position, both from FK
+- Wrist F/T → hinge torque: τ = (r × F)·ẑ
+- Both feed RLS → [Î, μ̂] updated online
+- Used during contact/manipulation phase
+
+VISION MODALITY (not yet built):
+- Camera → point cloud → kinematic model estimation (hinge axis, position)
+- Appearance-based inertia prior (coarse visual guess fed as weak prior)
+- Used before and during grasp for approach planning
+- Replaces hardcoded geometry in current simulation
+
+The two modalities are complementary: vision covers pre-grasp kinematics, 
+blind modality covers in-contact inertial estimation.
+
+---
+
+## RLS Update Equations
+
+Kalman gain:    K_k = P_{k-1}·φ_k / (λ + φ_k^T·P_{k-1}·φ_k)
+Parameter update: π̂_k = π̂_{k-1} + K_k·(τ_k - φ_k^T·π̂_{k-1})
+Covariance update: P_k = (1/λ)·(P_{k-1} - K_k·φ_k^T·P_{k-1})
+
+Initialization: π̂_0 = [5.0, 3.0]^T, P_0 = 1000·I_{2×2}
+Forgetting factor: λ = 0.995 → effective memory window ≈ 0.4s
+
+---
+
+## Simulation Progress (what has been built and validated)
+
+PHASE 0 (NumPy toy model):
+- Single revolute door, closed-form simulation
+- Quasi-static: I_err = 83.7%, condition number = 21
+- Excited: I_err = 0.9%, condition number = 2
+- Proves the observability claim analytically
+
+PHASE 0b (MuJoCo + online RLS + adaptive impedance controller):
+- Real 3D physics engine, door model with realistic geometry and density
+- KUKA iiwa 14 added to scene, end-effector welded to handle site via 
+  equality constraint (no gripper yet)
+- Oracle θ replaced with FK-derived θ from arm joint angles
+- Quasi-static: I_err = 99.1%, condition number ~1116
+- Excited: I_err = 0.3%, condition number ~2.6
+- Tracking RMSE = 0.0043 rad, zero velocity reversals
+- Convergence to <10% error at t ≈ 0.14s
+- Confirms Phase 0 effect holds in real physics engine with closed-loop 
+  controller
+
+PHASE 0c (raw sensor noise sensitivity sweep):
+- Added Gaussian noise to θ (σ = 0.5°–2.0°) and F/T (σ = 0.05–0.1 N·m)
+- Result: F/T noise alone doesn't matter — estimator robust across all 
+  tested τ noise levels
+- Angle noise destroys estimator — finite differencing of noisy angle 
+  amplifies noise catastrophically
+- Conclusion: proprioceptive FK (clean signal from arm encoders) is the 
+  correct angle source, not vision-differentiated angle
+
+FRICTION SWEEP (Phase 0b extension):
+- Swept μ_true from 0.5 to 7.0 N·m (14× range)
+- Fixed wrong initial guess μ_init = 3.0 N·m for all conditions
+- I_err stayed below 1.3% across all friction values
+- μ_err worst case 7.3% at μ_true = 0.5 N·m (6× initialization error)
+- Convergence time: 0.24s–1.39s across all conditions
+- Confirms inertia and friction are nearly orthogonal in the regression
+
+---
+
+## Current System Architecture
+
+MuJoCo scene: door.xml + KUKA iiwa 14 (from MuJoCo Menagerie)
+Key files:
+  - door.xml: single revolute door, frictionloss=3.0, density=600 kg/m³
+  - run_door_dynamics_validation.py: batch estimator, ground truth 
+    extraction, parameter sweeps
+  - run_door_adaptive_impedance.py: online RLS + adaptive impedance 
+    controller, video rendering
+
+What is still hardcoded (must be replaced for real hardware):
+  - Weld constraint instead of real gripper
+  - Hinge position and handle distance hardcoded (HANDLE_DIST = 0.85m)
+  - true_hinge_inertia() reads ground truth directly from MuJoCo model
+
+---
+
+## Scope Decisions Made
+
+- Revolute joints only for inertial estimation (prismatic collapses to 
+  trivial F=ma, one-parameter problem — not comparably interesting)
+- Kinematic formulation stays joint-type-agnostic via screw theory
+- Multi-joint extension is architecturally possible (regressor generalizes 
+  to τ = Φ(q,q̇,q̈)·π via classical Atkeson 1986 result — still linear 
+  in parameters) but thesis-scale, not ICRA-scale
+- Vision-only inertial estimation is impossible for vertical-hinge doors 
+  (gravity torque = 0, applied torque unknown → underdetermined) — this 
+  is an identifiability result, not a current-methods limitation
+- Dedicated wrist F/T sensor can be replaced by arm's own joint torque 
+  sensing (KUKA iiwa 14 has this natively) — reduces hardware requirements
+
+---
+
+## 10-Week Plan
+
+Week 1-2:   Problem statement, related work, observability analysis ✅
+Week 3-5:   Joint estimator in simulation ✅
+Week 6:     CHECKPOINT — estimator working in sim ✅
+Week 6-7:   Adaptive impedance controller ✅
+Week 7-8:   Add gripper (replace weld), add vision modality for kinematics
+Week 9:     CHECKPOINT — MVP complete; if behind, cut vision, ship estimator
+Week 9-10:  Writing, ablations, submission
+
+---
+
+## Slides Being Built (for advisor pitch)
+
+Structure agreed on:
+1. Overview ✅ (drafted)
+2. Literature review ✅ (drafted)
+3. Technical details — NEXT
+4. Next steps
+
+Overview slide content:
+  Problem:
+  - Existing systems use fixed hand-tuned force thresholds (Buchanan et al. 
+    flag this explicitly)
+  - A threshold tuned for a light cabinet overshoots on a heavy door
+  - Without knowing inertia, a controller cannot adapt to unseen objects
+
+  Gap:
+  - Existing methods assume inertial dynamics negligible
+  - Consequence of quasi-static interaction — inertia structurally 
+    unobservable, not an oversight
+
+  Insight:
+  - Deliberate mild excitation makes inertia observable without disrupting task
+
+  Contribution:
+  - Online estimator recovering inertia and friction jointly from 
+    proprioception + wrist F/T
+  - Adaptive impedance controller generalizing to unseen articulated objects
+
+  Status:
+  - Simulation validated on KUKA iiwa 14 — perception module next
+
+Literature review slide: drafted (see above comparison table)
+Next slide to build: Technical Details
+
+---
+
+## Communication Preferences
+
+- Explain before writing any code
+- Concise responses — no long outputs unless explicitly asked
+- Show reasoning explicitly, not just conclusions
+- Honest risk assessment over encouraging framing
+- When writing prompts for the coding agent (Cursor): keep them focused 
+  on one task, explicitly say what NOT to do, ask for results to be 
+  reported numerically
+
+---
+
+## Immediate Next Steps
+
+1. Build technical details slide for advisor pitch
+2. Add gripper to MuJoCo scene (Robotiq 2F-85 or simple parallel gripper) 
+   to replace weld constraint
+3. Add vision modality: depth camera in scene, kinematic model estimation 
+   from point cloud, replacing hardcoded hinge geometry
+4. Wire perception output into torque computation (replace hardcoded 
+   HANDLE_DIST and hinge position)
+5. Real hardware smoke test on KUKA iiwa 14
+
+From your project knowledge:
+
+martin19IJRR.pdf — Martín-Martín & Brock, IJRR 2019 ("Coupled Recursive Estimation for Online Interactive Perception of Articulated Objects")
+Online_Estimation_and_Manipulation_of_Articulated_Objects.pdf — Buchanan et al.
+Online_Interactive_Perception_of_Articulated_Objects_with_MultiLevel_Recursive_Estimation_Based_on_TaskSpecific_Priors.pdf
+GMAPP.pdf
+Visual_Perception_of_Articulded_objects.pdf
+React3d.pdf
+FlowBot3D_Learning_3D_Articulation_Flow_to_Manipulate_Articulated_Objects.pdf
+
+Files you uploaded during the conversation:
+
+run_door_dynamics_validation.py — batch estimator, ground truth extraction, parameter sweeps
+run_door_adaptive_impedance.py — online RLS + adaptive impedance controller
+cursor_mujoco_simulation_test_file.md — transcript from Cursor coding agent (uploaded twice, different versions)
+excerpt_from_previous_claude_message.txt — uploaded multiple times containing specific excerpts you wanted to discuss
+
+Files created during the conversation:
+
+phase0_observability_demo.py — NumPy toy observability demo
+phase0_observability_result.png — bar chart output from toy demo
+door.xml — MuJoCo MJCF door model
+run_door_sim.py — initial MuJoCo simulation script (later superseded by coding agent files)
+icra_project_pitch.md — full pitch document with lit review, problem formulation, 10-week plan
