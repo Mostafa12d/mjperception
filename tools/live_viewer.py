@@ -141,7 +141,8 @@ class BeliefRunner:
         from latent_mechanics.online.loop import init_strategies
 
         model, table, _, _ = load_checkpoint(checkpoint, device=device,
-                                             with_embeddings=True)
+                                             with_embeddings=True,
+                                             stage="live_viewer")
         model.freeze()
         self.model = model
 
