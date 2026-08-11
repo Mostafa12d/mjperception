@@ -162,6 +162,10 @@ class BeliefRunner:
             self.adaptor = UKFLatentAdaptor(
                 model, self.basis, init=init, prior_latents=train_latents,
                 device=device)
+            # The adaptor truncates the basis to UKFConfig.dim. Read it back so
+            # the readout describes the chart the filter is actually using
+            # rather than the wider one it was handed.
+            self.basis = self.adaptor.basis
         else:
             self.adaptor = GradientLatentAdaptor(
                 model, init=init, lr=lr, device=device)

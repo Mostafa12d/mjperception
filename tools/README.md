@@ -108,12 +108,24 @@ Three things to know about it:
 - **Near-limit transitions are skipped**, matching `SimConfig.exclude_near_limit`
   in training. The readout counts them (`+N skipped`). On `laptop` this is most
   of them, which is honest rather than a defect.
-- **`tr(P)` reads `n/a` on this branch.** See below.
+- **`tr(P)` needs the UKF.** The gradient baseline has no covariance, so it
+  displays `n/a` there. See below.
 
 Backends: `--belief auto` (default) uses the UKF if `latent_mechanics.belief` is
 importable and the gradient-descent baseline otherwise; `--belief gd` / `ukf`
 force one. Other knobs: `--init {zero,mean,medoid,random_trained}` (default
 `zero`, matching `OnlineConfig.default_init`), `--lr`, `--device`.
+
+With the UKF, use the checkpoint the basis was fit on, or the reduced
+coordinates describe directions the predictor never learned to use:
+
+```bash
+$MJP tools/live_viewer.py --family door --belief ukf \
+    --checkpoint runs/latent_mechanics/geometry/runs/all_families/best.pt
+```
+
+For any other checkpoint the basis is recomputed in memory from that
+checkpoint's own table and never written to disk, so the tool stays read-only.
 
 At exit the tool calls `assert_network_unchanged()` and prints confirmation, so
 "the predictor was frozen" is checked rather than assumed.
@@ -131,24 +143,44 @@ before you run it:
    comes from `AdaptorStep.error`, which is genuinely prequential — the
    prediction is made with the belief held *before* the transition is folded in.
 
-2. **On this branch there is no covariance to show.** `main` has
-   `latent_mechanics/online/adaptor.py` (`GradientLatentAdaptor`,
-   `StaticLatentAdaptor`) but **not** `latent_mechanics/belief/` — the UKF work,
-   the `LatentBasis` PCA mapping, and `geometry/` are not merged here.
-   `GradientLatentAdaptor.belief()` returns `{"mean": ..., "cov": None}`, so:
-   - `tr(P)` displays `n/a` rather than a placeholder number, and
-   - `z_pca` is omitted entirely, since the reduced-basis mapping is what would
-     supply it.
+2. **Only the UKF has a covariance.** `GradientLatentAdaptor.belief()` returns
+   `{"mean": ..., "cov": None}`, so under `--belief gd` the `tr(P)` field shows
+   `n/a` and `z_pca` is omitted entirely — the reduced-basis mapping is what
+   would supply it. Both fields are live under `--belief ukf`.
 
-   Both fields light up with no code change on a branch where the UKF is merged:
-   `--belief auto` detects it, `belief()` then returns `cov_reduced`, and the
-   basis supplies the first three PCA components. The viewer already reads
-   `cov_reduced` in preference to `cov` — the full 16-D `cov` is rank-deficient
-   by construction, so its trace would understate uncertainty.
+   The viewer reads `cov_reduced` in preference to `cov`: the full 16-D `cov` is
+   rank-deficient by construction (`decode_covariance` returns `V^T P_r V`, rank
+   `d`), so its trace would describe a chart the filter is not working in.
 
-If you want `tr(P)` and `z_pca` live, run this tool from a branch with
-`latent_mechanics/belief/` present (e.g. `fixes/foundation-audit`); nothing in
-the viewer needs to change.
+   `UKFLatentAdaptor` truncates whatever basis it is handed to `UKFConfig.dim`
+   (6), so the viewer reads the basis back off the adaptor after construction
+   and reports the chart actually in use — the persisted artifact has 8
+   components, and reporting that would misstate the filter's dimension.
+
+## Does the UKF actually work here?
+
+Yes. Six simulated seconds per family, `--init zero`, all-families checkpoint:
+
+| family | updates | skipped | tr(P) start → end | rmse q | rmse v |
+|---|---|---|---|---|---|
+| door | 299 | 0 | 7.78 → 0.073 | 9.96e-05 | 4.01e-03 |
+| door_narrow | 299 | 0 | 6.41 → 0.063 | 2.67e-04 | 1.90e-02 |
+| nonlinear_hinge | 299 | 0 | 4.73 → 0.100 | 6.51e-04 | 4.06e-02 |
+| soft_close | 299 | 0 | 4.89 → 0.067 | 6.01e-04 | 3.79e-02 |
+| drawer | 252 | 47 | 3.58 → 0.122 | 2.39e-03 | 1.32e-01 |
+| bifold | 299 | 0 | 5.34 → 0.098 | 4.93e-04 | 3.26e-02 |
+| laptop | 78 | 221 | 8.80 → 1.048 | 6.49e-03 | 4.52e-01 |
+
+Uncertainty collapses by roughly two orders of magnitude everywhere the filter
+gets a full stream of evidence. `laptop` is the informative exception: it spends
+most of its time against a joint stop, so 221 of its 299 transitions are
+excluded and it receives about a quarter of the evidence — and its `tr(P)`
+correspondingly stalls an order of magnitude higher than everything else. That
+is the filter honestly reporting that it has not been told enough, which is the
+behaviour you would want to be able to see.
+
+On the same door stream the UKF's one-step error is about 6x lower than the
+gradient baseline's (`q` 9.96e-05 vs 5.95e-04, `v` 4.01e-03 vs 1.74e-02).
 
 ## Fidelity check
 
