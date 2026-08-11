@@ -19,7 +19,7 @@ from typing import Sequence
 import mujoco
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.config import DoorSamplingConfig
 
 # Physical parameters recorded per door. Order defines the column order of the

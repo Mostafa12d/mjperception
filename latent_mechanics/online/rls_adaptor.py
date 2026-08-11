@@ -41,7 +41,7 @@ from typing import Any
 
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.online.adaptor import AdaptorStep, ArrayLike, OnlineAdaptor
 
 # Priors matching the baseline's own initialisation in run_door_adaptive_impedance.

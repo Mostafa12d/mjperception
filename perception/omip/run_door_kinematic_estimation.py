@@ -33,8 +33,8 @@ import mujoco
 import numpy as np
 from PIL import Image, ImageDraw
 
-from door_kinematic_scene import DoorKinematicSceneConfig, build_door_kinematic_scene_xml, linear_ramp
-from omip_geometry import (
+from perception.omip.door_kinematic_scene import DoorKinematicSceneConfig, build_door_kinematic_scene_xml, linear_ramp
+from perception.omip.omip_geometry import (
     cam_optical_to_world,
     dir_cam_optical_to_world,
     project_point,
@@ -50,8 +50,9 @@ from omip_geometry import (
 # ("HutchinsonGroup/omip" next to "HutchinsonGroup/mjperception");
 # override with the OMIP_REPO_ROOT env var if that's not the case.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", ".."))
 OMIP_REPO_ROOT = os.environ.get(
-    "OMIP_REPO_ROOT", os.path.normpath(os.path.join(_THIS_DIR, "..", "omip"))
+    "OMIP_REPO_ROOT", os.path.normpath(os.path.join(_REPO_ROOT, "..", "omip"))
 )
 for _p in (
     os.path.join(OMIP_REPO_ROOT, "omip_core", "build", "python"),
@@ -82,9 +83,9 @@ DEFAULT_HOLD_AFTER_S = 1.83  # static hold after motion ends
 # than at door_small.xml's full ~120 deg range.
 TARGET_ANGLE_RAD = math.radians(90.0)
 
-MEDIA_DIR = os.path.join(_THIS_DIR, "media")
+MEDIA_DIR = os.path.join(_REPO_ROOT, "media")
 VIDEO_PATH = os.path.join(MEDIA_DIR, "door_kinematic_estimation.mp4")
-LOG_CSV_PATH = os.path.join(_THIS_DIR, "door_kinematic_estimation_log.csv")
+LOG_CSV_PATH = os.path.join(MEDIA_DIR, "door_kinematic_estimation_log.csv")
 SUMMARY_PNG_PATH = os.path.join(MEDIA_DIR, "door_kinematic_estimation_summary.png")
 KINEMATICS_3D_PNG_PATH = os.path.join(MEDIA_DIR, "door_kinematic_estimation_3d.png")
 

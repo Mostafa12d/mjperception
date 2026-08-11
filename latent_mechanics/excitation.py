@@ -26,7 +26,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.config import ExcitationConfig
 
 

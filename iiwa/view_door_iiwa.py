@@ -23,7 +23,7 @@ import mujoco
 import mujoco_viewer
 import numpy as np
 
-from run_door_iiwa_estimation import (
+from iiwa.run_door_iiwa_estimation import (
     DT,
     N_STEPS,
     T_END,
@@ -33,6 +33,7 @@ from run_door_iiwa_estimation import (
     tau_excited,
     tau_quasistatic,
 )
+from scenes import REPO_ROOT
 
 RENDER_EVERY = 10
 FPS = 1.0 / (DT * RENDER_EVERY)
@@ -144,7 +145,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    os.chdir(os.path.dirname(os.path.abspath(__file__)) or ".")
+    os.chdir(REPO_ROOT)   # keep artifact outputs landing in the repo root
 
     if args.both:
         run_video("qs")

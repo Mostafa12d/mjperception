@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.config import ExperimentConfig
 from latent_mechanics.mechanisms import library as lib
 from latent_mechanics.mechanisms.rollout import MechanismEpisodes, rollout_mechanism

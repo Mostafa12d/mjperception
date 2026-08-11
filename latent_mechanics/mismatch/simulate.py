@@ -26,7 +26,7 @@ from typing import Callable, Sequence
 import mujoco
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.mismatch.perturbations import PlantPerturbation
 
 

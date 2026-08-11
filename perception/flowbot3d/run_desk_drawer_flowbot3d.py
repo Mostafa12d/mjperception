@@ -16,12 +16,13 @@ import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
 
-from flowbot3d_bridge import query_flowbot3d
-from rgbd_camera import RGBDCamera
-from view_flowbot3d_prediction import render_scene_with_prediction
+from perception.flowbot3d.flowbot3d_bridge import query_flowbot3d
+from perception.rgbd_camera import RGBDCamera
+from perception.flowbot3d.view_flowbot3d_prediction import render_scene_with_prediction
+from scenes import REPO_ROOT, scene_path
 
-SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "desk_drawer_scene.xml")
-MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media")
+SCENE_PATH = scene_path("desk_drawer_scene.xml")
+MEDIA_DIR = os.path.join(REPO_ROOT, "media")
 OUT_PNG = os.path.join(MEDIA_DIR, "desk_drawer_flowbot3d_prediction.png")
 OUT_SCENE_PNG = os.path.join(MEDIA_DIR, "desk_drawer_flowbot3d_scene.png")
 

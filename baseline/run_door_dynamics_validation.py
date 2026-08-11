@@ -22,7 +22,9 @@ from typing import Callable
 import mujoco
 import numpy as np
 
-MODEL_PATH = "door.xml"
+from scenes import scene_path
+
+MODEL_PATH = scene_path("door.xml")
 DT = 0.002
 T_END = 6.0
 N_STEPS = int(T_END / DT)
@@ -90,8 +92,14 @@ def load_model(
     damping: float = DEFAULT_DAMPING,
     model_path: str = MODEL_PATH,
 ) -> mujoco.MjModel:
-    """Load a door XML and override mass-scale / joint friction / damping."""
-    model = mujoco.MjModel.from_xml_path(model_path)
+    """Load a door XML and override mass-scale / joint friction / damping.
+
+    ``model_path`` may be a bare filename such as ``"door.xml"``; it is resolved
+    against ``scenes/``. Resolving here rather than at each call site is what
+    lets ``configs/*.yaml`` and datasets cached before the scene files moved keep
+    storing the bare name.
+    """
+    model = mujoco.MjModel.from_xml_path(scene_path(model_path))
     bid = model.body("door").id
     scale = density / DEFAULT_DENSITY
     model.body_mass[bid] *= scale

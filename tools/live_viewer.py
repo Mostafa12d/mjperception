@@ -57,7 +57,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-import run_door_dynamics_validation as dyn  # noqa: E402
+from baseline import run_door_dynamics_validation as dyn  # noqa: E402
 from latent_mechanics.config import ExperimentConfig, load_config  # noqa: E402
 from latent_mechanics.mechanisms import library as lib  # noqa: E402
 from latent_mechanics.mechanisms.rollout import near_limit_mask  # noqa: E402

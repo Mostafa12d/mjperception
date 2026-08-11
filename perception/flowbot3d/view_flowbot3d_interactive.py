@@ -17,9 +17,9 @@ import mujoco
 import mujoco_viewer
 import numpy as np
 
-from flowbot3d_bridge import query_flowbot3d
-from rgbd_camera import RGBDCamera
-from view_flowbot3d_prediction import SCENE_PATH, door_pointcloud
+from perception.flowbot3d.flowbot3d_bridge import query_flowbot3d
+from perception.rgbd_camera import RGBDCamera
+from perception.flowbot3d.view_flowbot3d_prediction import SCENE_PATH, door_pointcloud
 
 N_FIELD_ARROWS = 60
 FIELD_ARROW_LEN = 0.1

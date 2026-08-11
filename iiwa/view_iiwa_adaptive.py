@@ -18,12 +18,12 @@ import mujoco
 import mujoco_viewer
 import numpy as np
 
-from run_door_dynamics_validation import rls_init, rls_step
-from run_door_adaptive_impedance import (
+from baseline.run_door_dynamics_validation import rls_init, rls_step
+from baseline.run_door_adaptive_impedance import (
     reference_smooth,
     DITHER_AMP, DITHER_FREQ, TAU_MAX,
 )
-from run_door_iiwa_estimation import (
+from iiwa.run_door_iiwa_estimation import (
     DT, N_STEPS, T_END,
     load_iiwa_door_model,
     door_angle_from_proprio,
@@ -31,10 +31,11 @@ from run_door_iiwa_estimation import (
     arm_torques_for_hinge_torque,
     true_hinge_inertia,
 )
-from run_iiwa_adaptive_impedance import (
+from iiwa.run_iiwa_adaptive_impedance import (
     adaptive_gains,
     RLS_LAM, I_HAT_INIT, MU_HAT_INIT, VEL_THRESH,
 )
+from scenes import REPO_ROOT
 
 TARGET_FPS  = 60.0
 RENDER_EVERY = max(1, int(round(1.0 / (TARGET_FPS * DT))))
@@ -229,7 +230,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    os.chdir(os.path.dirname(os.path.abspath(__file__)) or ".")
+    os.chdir(REPO_ROOT)   # keep artifact outputs landing in the repo root
 
     mode = "qs" if args.mode == "qs" else "excited"
     if args.video:

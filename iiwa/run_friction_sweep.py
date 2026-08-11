@@ -23,12 +23,12 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from run_door_dynamics_validation import rls_init, rls_step
-from run_door_adaptive_impedance import (
+from baseline.run_door_dynamics_validation import rls_init, rls_step
+from baseline.run_door_adaptive_impedance import (
     reference_smooth,
     DITHER_AMP, DITHER_FREQ, TAU_MAX, T_RAMP,
 )
-from run_door_iiwa_estimation import (
+from iiwa.run_door_iiwa_estimation import (
     DT, N_STEPS, T_END,
     load_iiwa_door_model,
     door_angle_from_proprio,
@@ -36,7 +36,7 @@ from run_door_iiwa_estimation import (
     arm_torques_for_hinge_torque,
     true_hinge_inertia,
 )
-from run_iiwa_adaptive_impedance import (
+from iiwa.run_iiwa_adaptive_impedance import (
     adaptive_gains,
     _convergence_time,
     RLS_LAM, OMEGA_N, ZETA, VEL_THRESH,

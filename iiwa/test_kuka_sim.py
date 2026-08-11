@@ -11,8 +11,9 @@ Run with:
 import os
 import mujoco as mj
 import mujoco_viewer
+from scenes import SCENES_DIR
 
-MODEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kuka_iiwa_14", "scene.xml")
+MODEL_PATH = os.path.join(SCENES_DIR, "kuka_iiwa_14", "scene.xml")
 
 
 def main() -> None:

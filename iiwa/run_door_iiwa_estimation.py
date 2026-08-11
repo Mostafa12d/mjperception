@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import mujoco
 
-from run_door_dynamics_validation import (
+from baseline.run_door_dynamics_validation import (
     DT,
     HANDLE_DIST,
     true_hinge_inertia,
@@ -32,8 +32,9 @@ from run_door_dynamics_validation import (
     hinge_torque_from_handle_force,
     fit_params,
 )
+from scenes import scene_path
 
-SCENE_PATH = "door_iiwa_scene.xml"
+SCENE_PATH = scene_path("door_iiwa_scene.xml")
 # Keep EE kinematics; reduce dynamic loading through the weld on the door DOF.
 ARM_INERTIA_SCALE = 0.025
 ARM_JOINT_ARMATURE = 0.24

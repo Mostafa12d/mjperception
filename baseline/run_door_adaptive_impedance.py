@@ -24,7 +24,7 @@ import mujoco
 import imageio
 import matplotlib.pyplot as plt
 
-from run_door_dynamics_validation import (
+from baseline.run_door_dynamics_validation import (
     DT,
     HANDLE_DIST,
     DEFAULT_DENSITY,

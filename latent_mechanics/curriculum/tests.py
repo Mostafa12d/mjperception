@@ -28,7 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.config import load_config as load_stage1_config
 from latent_mechanics.curriculum.figures import (
     effective_dimension,

@@ -20,7 +20,7 @@ from typing import Callable, Sequence
 import mujoco
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.config import ExperimentConfig
 from latent_mechanics.data_gen import moving_fraction, transitions_from_log
 from latent_mechanics.excitation import sample_profile

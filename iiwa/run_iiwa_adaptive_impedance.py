@@ -29,8 +29,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from run_door_dynamics_validation import rls_init, rls_step
-from run_door_adaptive_impedance import (
+from baseline.run_door_dynamics_validation import rls_init, rls_step
+from baseline.run_door_adaptive_impedance import (
     reference_smooth,
     DITHER_AMP,
     DITHER_FREQ,
@@ -38,7 +38,7 @@ from run_door_adaptive_impedance import (
     T_RAMP,
     THETA_GOAL,
 )
-from run_door_iiwa_estimation import (
+from iiwa.run_door_iiwa_estimation import (
     DT,
     N_STEPS,
     T_END,

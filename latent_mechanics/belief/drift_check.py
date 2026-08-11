@@ -34,7 +34,7 @@ from pathlib import Path
 
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.belief.adaptor import UKFConfig, UKFLatentAdaptor
 from latent_mechanics.belief.basis import DEFAULT_TABLE, load_or_create
 from latent_mechanics.config import load_config as load_stage1_config

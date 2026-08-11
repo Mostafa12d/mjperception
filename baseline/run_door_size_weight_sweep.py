@@ -20,7 +20,7 @@ Run:
 
 from __future__ import annotations
 
-from run_door_adaptive_impedance import run_condition, DITHER_AMP, TAU_MAX, KP, KD
+from baseline.run_door_adaptive_impedance import run_condition, DITHER_AMP, TAU_MAX, KP, KD
 
 SMALL_DOOR_PATH = "door_small.xml"
 SMALL_HANDLE_DIST = 0.4

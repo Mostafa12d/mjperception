@@ -25,10 +25,11 @@ import matplotlib.pyplot as plt
 import mujoco
 import numpy as np
 
-from rgbd_camera import RGBDCamera
+from perception.rgbd_camera import RGBDCamera
+from scenes import REPO_ROOT, scene_path
 
-SCENE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "camera_scene.xml")
-MEDIA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "media")
+SCENE_PATH = scene_path("camera_scene.xml")
+MEDIA_DIR = os.path.join(REPO_ROOT, "media")
 RGB_OUT = os.path.join(MEDIA_DIR, "camera_rgb.png")
 DEPTH_OUT = os.path.join(MEDIA_DIR, "camera_depth.png")
 POINTS_OUT = os.path.join(MEDIA_DIR, "camera_points_world.npy")

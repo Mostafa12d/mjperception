@@ -17,7 +17,7 @@ one row of an embedding table, learned jointly with the network by gradient
 descent. Stage 2 will keep the network, throw the table away, and optimise a
 fresh `z` online for an unseen door.
 
-The RLS baseline (`run_door_dynamics_validation.py` and everything importing it)
+The RLS baseline (`baseline/run_door_dynamics_validation.py` and everything importing it)
 is **not modified by any of this**. This package imports from it.
 
 ---

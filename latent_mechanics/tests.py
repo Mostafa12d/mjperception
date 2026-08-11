@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics import door_sampler
 from latent_mechanics.config import ExperimentConfig, load_config
 from latent_mechanics.data_gen import episode_length, generate_dataset, save_dataset

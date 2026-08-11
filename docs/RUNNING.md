@@ -4,15 +4,53 @@ Everything here is MuJoCo-based work on **estimating the mechanics of articulate
 objects** (mostly a hinged door) while interacting with them. Four largely
 independent lines of work live side by side:
 
-| line of work | what it is | entry points |
+| line of work | what it is | package |
 |---|---|---|
-| **A. RLS baseline** | classical online system identification: `τ = I·θ̈ + μ·sign(θ̇) + b·θ̇`, estimated by recursive least squares, plus an adaptive-impedance controller that uses the running estimate | `run_door_*.py`, `run_friction_sweep.py` |
-| **B. KUKA iiwa** | the same estimation/control loop, but driven through a 7-DoF arm with a simulated wrist F/T sensor instead of abstract hinge torques | `run_*iiwa*.py`, `view_*iiwa*.py` |
-| **C. Latent mechanics** | a learned dynamics model with a per-object latent "mechanics vector", adapted online and compared head-to-head against A | `latent_mechanics/` (5 stages) |
-| **D. Perception** | RGB-D capture, FlowBot3D articulation-flow prediction, and OMIP kinematic-structure estimation | `rgbd_camera.py`, `*flowbot3d*.py`, `run_door_kinematic_estimation.py` |
+| **A. RLS baseline** | classical online system identification: `τ = I·θ̈ + μ·sign(θ̇) + b·θ̇`, estimated by recursive least squares, plus an adaptive-impedance controller that uses the running estimate | [baseline/](../baseline/) |
+| **B. KUKA iiwa** | the same estimation/control loop, but driven through a 7-DoF arm with a simulated wrist F/T sensor instead of abstract hinge torques | [iiwa/](../iiwa/) |
+| **C. Latent mechanics** | a learned dynamics model with a per-object latent "mechanics vector", adapted online and compared head-to-head against A | [latent_mechanics/](../latent_mechanics/) (5 stages) |
+| **D. Perception** | RGB-D capture, FlowBot3D articulation-flow prediction, and OMIP kinematic-structure estimation | [perception/](../perception/) |
 
 A and C are the two halves of the central comparison; B and D are the paths
 toward making it hardware-realizable.
+
+---
+
+## 0. Layout, and how to invoke anything
+
+```
+mjperception/
+├── baseline/          line A — the RLS baseline and the spine of the repo
+├── iiwa/              line B — KUKA iiwa 14 with FK + wrist F/T sensing
+├── perception/        line D — RGB-D
+│   ├── flowbot3d/         articulation-flow prediction (external repo, own venv)
+│   └── omip/              kinematic-structure estimation (Python 3.12 only)
+├── latent_mechanics/  line C — five stages, plus geometry/ and belief/
+├── scenes/            every MuJoCo XML and mesh, plus the path resolver
+├── tools/             live_viewer.py
+├── configs/           YAML for the latent-mechanics stages
+├── data/ runs/ media/ generated artifacts (all gitignored)
+├── docs/              this file, PROJECT_STATUS.md
+└── archive/           park/ (parked experiments) and notes/ (handover docs)
+```
+
+**Every command in this document is run as a module, from the repository
+root:**
+
+```bash
+python3.10 -m baseline.run_door_dynamics_validation      # correct
+python3.10 baseline/run_door_dynamics_validation.py      # will NOT work
+```
+
+The second form fails because it puts `baseline/` on `sys.path` instead of the
+repo root, so `from scenes import scene_path` and the cross-package imports
+cannot resolve. To run from somewhere else, set
+`PYTHONPATH=/path/to/mjperception`.
+
+Scene assets are resolved through [scenes/\_\_init\_\_.py](../scenes/__init__.py),
+which anchors them to `__file__`. Loading a scene therefore no longer depends on
+the working directory — a bare `"door.xml"` in a config or a cached dataset
+still resolves, and a wrong name fails immediately and by name.
 
 ---
 
@@ -33,7 +71,7 @@ Verify:
 
 ```bash
 python -c "import mujoco, torch; print(mujoco.__version__, torch.__version__)"
-python test_kuka_sim.py        # opens a MuJoCo window with the iiwa; close to exit
+python -m iiwa.test_kuka_sim        # opens a MuJoCo window with the iiwa; close to exit
 ```
 
 > Interactive viewers use `mujoco_python_viewer`, **not** `mujoco.viewer`, so a
@@ -41,7 +79,7 @@ python test_kuka_sim.py        # opens a MuJoCo window with the iiwa; close to e
 
 ### OMIP environment (Python 3.12)
 
-Only [run_door_kinematic_estimation.py](run_door_kinematic_estimation.py) needs
+Only [run_door_kinematic_estimation.py](../perception/omip/run_door_kinematic_estimation.py) needs
 this. `omip_core` is a locally built pybind11 `.so` compiled for CPython 3.12,
 so it cannot be imported from the 3.10 environment.
 
@@ -65,12 +103,12 @@ must exist.
 ### FlowBot3D (external repo, own venv)
 
 The FlowBot3D scripts do **not** import FlowBot3D. They shell out to its own
-interpreter through [flowbot3d_bridge.py](flowbot3d_bridge.py), because
+interpreter through [flowbot3d_bridge.py](../perception/flowbot3d/flowbot3d_bridge.py), because
 FlowBot3D pins `torch==1.13.1` with source-built torch-scatter/sparse/cluster,
 which conflicts irreconcilably with this project's `torch==2.8.0`.
 
 Expected layout, hard-coded at the top of
-[flowbot3d_bridge.py:26-31](flowbot3d_bridge.py#L26-L31):
+[flowbot3d_bridge.py:26-31](../perception/flowbot3d/flowbot3d_bridge.py#L26-L31):
 
 ```
 HutchinsonGroup/
@@ -90,7 +128,7 @@ onward will not run; nothing else in the repo is affected.
 
 ```bash
 # A. RLS baseline: prints the ablation + sweep tables (no files written)
-python3.10 run_door_dynamics_validation.py
+python3.10 -m baseline.run_door_dynamics_validation
 
 # C. Latent mechanics, end to end (~2 min total on CPU)
 python3.10 -m latent_mechanics.data_gen  --config configs/latent_mechanics.yaml
@@ -105,10 +143,10 @@ python3.10 -m latent_mechanics.online.experiments --config configs/online_adapta
 
 These use oracle MuJoCo kinematics (`qpos`/`qvel`/`qacc`) and reconstruct hinge
 torque from a handle force. Vision is deliberately not used; see
-[park/vision_theta_interface.py](park/vision_theta_interface.py) for the parked
+[archive/park/vision_theta_interface.py](../archive/park/vision_theta_interface.py) for the parked
 drop-in θ̂ API.
 
-### 3.1 `run_door_dynamics_validation.py` — the reference implementation
+### 3.1 `baseline/run_door_dynamics_validation.py` — the reference implementation
 
 **This is the file everything else imports.** `load_model`, `simulate`,
 `rls_init`, `rls_step`, `hinge_torque_from_handle_force` and
@@ -117,7 +155,7 @@ drop-in θ̂ API.
 Changing it changes every downstream result.
 
 ```bash
-python3.10 run_door_dynamics_validation.py
+python3.10 -m baseline.run_door_dynamics_validation
 ```
 
 No arguments, no output files — it prints four things to stdout:
@@ -127,14 +165,14 @@ No arguments, no output files — it prints four things to stdout:
 3. parameter sweeps over density, friction and excitation
 4. online RLS with a forgetting factor
 
-Runtime ≈ 30 s. Model: [door.xml](door.xml), 6 s episodes at dt = 0.002.
+Runtime ≈ 30 s. Model: [door.xml](../scenes/door.xml), 6 s episodes at dt = 0.002.
 
-### 3.2 `run_door_adaptive_impedance.py` — adaptive control, two conditions
+### 3.2 `baseline/run_door_adaptive_impedance.py` — adaptive control, two conditions
 
 Closes the loop: the impedance controller consumes the live RLS estimate.
 
 ```bash
-python3.10 run_door_adaptive_impedance.py
+python3.10 -m baseline.run_door_adaptive_impedance
 ```
 
 Runs both conditions back to back:
@@ -147,20 +185,20 @@ Runs both conditions back to back:
 Writes `adaptive_quasistatic.mp4`, `adaptive_excited.mp4`,
 `adaptive_impedance_results.png`, `adaptive_impedance_dither_log.csv`.
 
-### 3.3 `run_door_size_weight_sweep.py` — generalization of the tuned controller
+### 3.3 `baseline/run_door_size_weight_sweep.py` — generalization of the tuned controller
 
 Asks whether the controller tuned in 3.2 survives a change of plant with **no
 retuning at all** (`Kp`, `Kd`, `TAU_MAX`, `DITHER_AMP`, `DITHER_FREQ`, `RLS_LAM`,
 `TRACE_P_THRESH`, `RAMP_DURATION` are imported unchanged). Only the door changes:
-[door_small.xml](door_small.xml), density swept light (200) / heavy (1400).
+[door_small.xml](../scenes/door_small.xml), density swept light (200) / heavy (1400).
 
 ```bash
-python3.10 run_door_size_weight_sweep.py
+python3.10 -m baseline.run_door_size_weight_sweep
 ```
 
 Writes `adaptive_small_{light,heavy}.mp4` and matching `*_dither_log.csv`.
 
-### 3.4 `phase0_observability_demo.py` — the original motivating experiment
+### 3.4 `baseline/phase0_observability_demo.py` — the original motivating experiment
 
 Pure NumPy, no MuJoCo. Shows why quasi-static motion cannot identify inertia:
 least-squares fit of `[I, μ]` from noisy differentiated positions, compared
@@ -168,7 +206,7 @@ between a quasi-static and an excited torque profile, with regressor
 conditioning reported.
 
 ```bash
-python3.10 phase0_observability_demo.py
+python3.10 -m baseline.phase0_observability_demo
 ```
 
 ---
@@ -181,14 +219,14 @@ equality-constraint rows of MuJoCo's `efc` arrays. Notably this does *not*
 include the door's own frictionloss, which is what lets the estimator recover
 `I_hinge` and `μ` separately.
 
-Scene: [door_iiwa_scene.xml](door_iiwa_scene.xml), arm assets in
-[kuka_iiwa_14/](kuka_iiwa_14/).
+Scene: [door_iiwa_scene.xml](../scenes/door_iiwa_scene.xml), arm assets in
+[kuka_iiwa_14/](../scenes/kuka_iiwa_14/).
 
 ```bash
-python3.10 test_kuka_sim.py               # sanity: arm loads and steps
-python3.10 run_door_iiwa_estimation.py    # estimation only, F/T + FK sensing
-python3.10 run_iiwa_adaptive_impedance.py # + gains that scale with live Î
-python3.10 run_friction_sweep.py          # μ_true ∈ {0.5,1,2,3,5,7} N·m, fixed wrong init
+python3.10 -m iiwa.test_kuka_sim               # sanity: arm loads and steps
+python3.10 -m iiwa.run_door_iiwa_estimation    # estimation only, F/T + FK sensing
+python3.10 -m iiwa.run_iiwa_adaptive_impedance # + gains that scale with live Î
+python3.10 -m iiwa.run_friction_sweep          # μ_true ∈ {0.5,1,2,3,5,7} N·m, fixed wrong init
 ```
 
 `run_iiwa_adaptive_impedance.py` writes `iiwa_adaptive_results.png`;
@@ -198,14 +236,14 @@ python3.10 run_friction_sweep.py          # μ_true ∈ {0.5,1,2,3,5,7} N·m, fi
 ### Viewers
 
 ```bash
-python3.10 view_door_iiwa.py              # excited profile (default)
-python3.10 view_door_iiwa.py --mode qs    # quasi-static creep
-python3.10 view_door_iiwa.py --video      # write mp4 instead of opening a window
-python3.10 view_door_iiwa.py --both       # live window and mp4
+python3.10 -m iiwa.view_door_iiwa              # excited profile (default)
+python3.10 -m iiwa.view_door_iiwa --mode qs    # quasi-static creep
+python3.10 -m iiwa.view_door_iiwa --video      # write mp4 instead of opening a window
+python3.10 -m iiwa.view_door_iiwa --both       # live window and mp4
 
-python3.10 view_iiwa_adaptive.py          # adaptive controller, live estimates in the title bar
-python3.10 view_iiwa_adaptive.py --mode qs
-python3.10 view_iiwa_adaptive.py --video
+python3.10 -m iiwa.view_iiwa_adaptive          # adaptive controller, live estimates in the title bar
+python3.10 -m iiwa.view_iiwa_adaptive --mode qs
+python3.10 -m iiwa.view_iiwa_adaptive --video
 ```
 
 Close the window to exit.
@@ -216,14 +254,14 @@ Close the window to exit.
 
 ### 5.1 RGB-D camera
 
-[rgbd_camera.py](rgbd_camera.py) is a library, not a script: it wraps
+[rgbd_camera.py](../perception/rgbd_camera.py) is a library, not a script: it wraps
 `mujoco.Renderer` for synchronized RGB + depth, derives pinhole intrinsics from
 the camera's `fovy`, and back-projects depth to point clouds in camera or world
 frame. Verify it against the standalone scene:
 
 ```bash
-python3.10 view_camera_scene.py                # saves RGB + depth to media/
-python3.10 view_camera_scene.py --interactive  # live rotatable 3D point cloud
+python3.10 -m perception.view_camera_scene                # saves RGB + depth to media/
+python3.10 -m perception.view_camera_scene --interactive  # live rotatable 3D point cloud
 ```
 
 ### 5.2 FlowBot3D — articulation flow prediction
@@ -234,22 +272,22 @@ direction.
 
 ```bash
 # static prediction on the iiwa door scene, saved to media/
-python3.10 view_flowbot3d_prediction.py [--qpos 0.5] [--scene SCENE.xml]
+python3.10 -m perception.flowbot3d.view_flowbot3d_prediction [--qpos 0.5] [--scene SCENE.xml]
 
 # same prediction, but in an orbit/zoom/pan viewer instead of a PNG
-python3.10 view_flowbot3d_interactive.py [--scene SCENE.xml] [--qpos 0.5]
+python3.10 -m perception.flowbot3d.view_flowbot3d_interactive [--scene SCENE.xml] [--qpos 0.5]
 
 # live: the door swings under a scripted torque, re-queried ~1 Hz with the
 # overlay updating on the moving door
-python3.10 live_flowbot3d_view.py
+python3.10 -m perception.flowbot3d.live_flowbot3d_view
 
 # perception-only check on the desk drawer (no robot, no physics)
-python3.10 run_desk_drawer_flowbot3d.py
+python3.10 -m perception.flowbot3d.run_desk_drawer_flowbot3d
 
 # any standalone asset scene -- injects a camera via MjSpec, so the original
 # file is never modified and no per-scene setup is needed
-python3.10 view_flowbot3d_asset.py --scene /path/to/scene.xml
-python3.10 view_flowbot3d_asset.py --scene /path/to/scene.xml --joint lid_hinge --qpos 1.0
+python3.10 -m perception.flowbot3d.view_flowbot3d_asset --scene /path/to/scene.xml
+python3.10 -m perception.flowbot3d.view_flowbot3d_asset --scene /path/to/scene.xml --joint lid_hinge --qpos 1.0
 ```
 
 `--qpos` sets the articulated joint's position before capture, which is how you
@@ -263,8 +301,8 @@ feature_tracker → rb_tracker → joint_tracker pipeline and logs the resulting
 rigid-body poses and joint-type/parameter estimate.
 
 ```bash
-.venv-omip/bin/python run_door_kinematic_estimation.py
-.venv-omip/bin/python run_door_kinematic_estimation.py \
+.venv-omip/bin/python -m perception.omip.run_door_kinematic_estimation
+.venv-omip/bin/python -m perception.omip.run_door_kinematic_estimation \
     --lead-in-s 0.5 --swing-s 5.0 --hold-after-s 1.83
 ```
 
@@ -277,10 +315,10 @@ rigid-body poses and joint-type/parameter estimate.
 Writes `media/door_kinematic_estimation.mp4`,
 `media/door_kinematic_estimation_summary.png`,
 `media/door_kinematic_estimation_3d.png`, and
-`door_kinematic_estimation_log.csv`.
+`media/door_kinematic_estimation_log.csv`.
 
 The scene is generated in Python by
-[door_kinematic_scene.py](door_kinematic_scene.py) rather than being a static
+[door_kinematic_scene.py](../perception/omip/door_kinematic_scene.py) rather than being a static
 XML, for two reasons documented there: the door panel needs a literal
 checkerboard of small box geoms (MuJoCo's `builtin="checker"` texture only tiles
 correctly on `plane` geoms, so a textured box gives the corner detector nothing
@@ -302,10 +340,10 @@ only how to run them and what depends on what.
 
 | stage | package | README | question |
 |---|---|---|---|
-| 1 | `latent_mechanics/` | [README](latent_mechanics/README.md) | can one network + a per-door latent represent many doors? |
-| 2 | `latent_mechanics/online/` | [README](latent_mechanics/online/README.md) | can the latent be adapted online on an unseen door, vs RLS? |
-| 3 | `latent_mechanics/mismatch/` | [README](latent_mechanics/mismatch/README.md) | when does latent adaptation beat explicit estimation? |
-| 4 | `latent_mechanics/mechanisms/` | [README](latent_mechanics/mechanisms/README.md) | does the latent encode *doors* or *mechanics*? |
+| 1 | `latent_mechanics/` | [README](../latent_mechanics/README.md) | can one network + a per-door latent represent many doors? |
+| 2 | `latent_mechanics/online/` | [README](../latent_mechanics/online/README.md) | can the latent be adapted online on an unseen door, vs RLS? |
+| 3 | `latent_mechanics/mismatch/` | [README](../latent_mechanics/mismatch/README.md) | when does latent adaptation beat explicit estimation? |
+| 4 | `latent_mechanics/mechanisms/` | [README](../latent_mechanics/mechanisms/README.md) | does the latent encode *doors* or *mechanics*? |
 | 5 | `latent_mechanics/curriculum/` | — | does offline mechanical diversity buy online adaptability? |
 
 ### Dependency graph
@@ -343,7 +381,7 @@ tensorboard --logdir runs/latent_mechanics
 ```
 
 ≈ 35 s simulation + 55 s CPU training + a few seconds of evaluation. No GPU
-needed. Config: [configs/latent_mechanics.yaml](configs/latent_mechanics.yaml)
+needed. Config: [configs/latent_mechanics.yaml](../configs/latent_mechanics.yaml)
 (48 training doors × 8 episodes × 6 s, 50 Hz, `embed_dim` 16, 60 epochs).
 
 CLI overrides, for quick experiments without editing the YAML:
@@ -373,7 +411,7 @@ python3.10 -m latent_mechanics.online.experiments --no-animation         # skip 
 ```
 
 ≈ 66 s on CPU. Config:
-[configs/online_adaptation.yaml](configs/online_adaptation.yaml). Requires
+[configs/online_adaptation.yaml](../configs/online_adaptation.yaml). Requires
 `runs/latent_mechanics/base/best.pt` and `data/door_mechanics.npz` from Stage 1.
 
 `--only` accepts `1`, `2`, `3` or a comma-separated subset:
@@ -395,7 +433,7 @@ python3.10 -m latent_mechanics.mismatch.study --only stribeck,drift # a subset
 python3.10 -m latent_mechanics.mismatch.study --doors 2 --episodes 2 --no-figures  # fast smoke run
 ```
 
-Config: [configs/mismatch.yaml](configs/mismatch.yaml). Sweep definitions live in
+Config: [configs/mismatch.yaml](../configs/mismatch.yaml). Sweep definitions live in
 `latent_mechanics/mismatch/config.py` (`default_sweeps`) — one `Sweep` entry per
 mismatch mechanism. Adding a mechanism means writing a `PlantPerturbation`
 subclass and one `Sweep`; nothing is hard-coded in the simulator or the driver.
@@ -441,8 +479,8 @@ dependency; without them the analysis falls back to PCA.
 ### Stage 5 — diversity curriculum
 
 No README yet; the module docstrings in
-[levels.py](latent_mechanics/curriculum/levels.py) and
-[study.py](latent_mechanics/curriculum/study.py) are the reference.
+[levels.py](../latent_mechanics/curriculum/levels.py) and
+[study.py](../latent_mechanics/curriculum/study.py) are the reference.
 
 ```bash
 python3.10 -m latent_mechanics.curriculum.tests
@@ -471,7 +509,7 @@ deliberately far from any training seed), reporting per test instance: `before`
 converge, and whether adaptation made things *worse*.
 
 Defaults live in `CurriculumConfig`
-([levels.py:71-88](latent_mechanics/curriculum/levels.py#L71-L88)); the CLI flags
+([levels.py:71-88](../latent_mechanics/curriculum/levels.py#L71-L88)); the CLI flags
 override them. Output: `runs/latent_mechanics/curriculum/`.
 
 ---
@@ -499,7 +537,7 @@ suite.
 
 ## 8. Outputs, and what is version-controlled
 
-[.gitignore](.gitignore) excludes all generated artifacts: `*.png`, `*.jpg`,
+[.gitignore](../.gitignore) excludes all generated artifacts: `*.png`, `*.jpg`,
 `*.mp4`, `media/`, `runs/`, `data/*.npz`, `MUJOCO_LOG.TXT`. Everything below can
 be regenerated by rerunning the commands above.
 
@@ -512,10 +550,13 @@ be regenerated by rerunning the commands above.
 | `runs/latent_mechanics/curriculum/` | Stage 5 |
 | `adaptive_*.mp4`, `adaptive_*.png`, `*_dither_log.csv` | line-A control scripts (repo root) |
 | `iiwa_adaptive_results.png`, `friction_sweep_*.png` | line-B scripts (repo root) |
-| `door_kinematic_estimation_log.csv` | OMIP script (repo root) |
 
-The line-A/B scripts write into the repo root rather than `media/`, which is a
-historical inconsistency, not a decision.
+The line-A/B scripts still write into the repo root rather than `media/`, which
+is a historical inconsistency rather than a decision — they build their output
+names as bare relative paths, so the artifacts land wherever the process was
+started. The two iiwa viewers `os.chdir()` to the repo root on startup to keep
+that predictable. Worth cleaning up, but it changes filenames referenced in the
+stage notes, so it was left alone during the reorganisation.
 
 ---
 
@@ -523,14 +564,14 @@ historical inconsistency, not a decision.
 
 | file | contents |
 |---|---|
-| [door.xml](door.xml) | the standard door; the plant for line A and Stage 1 |
-| [door_small.xml](door_small.xml) | half-size panel; used by the size/weight sweep. Compatible with Stage 1's `doors.model_paths`, but it changes the handle moment arm — re-check the recorded action scale if you add it |
-| [door_scene.xml](door_scene.xml) | door with floor/walls for rendering |
-| [door_iiwa_scene.xml](door_iiwa_scene.xml) | door + KUKA iiwa 14 welded at the handle |
-| [kuka_iiwa_14/](kuka_iiwa_14/) | arm meshes and `scene.xml` |
-| [camera_scene.xml](camera_scene.xml), [rgbd_camera.xml](rgbd_camera.xml) | standalone RGB-D camera test scenes |
-| [desk_drawer_scene.xml](desk_drawer_scene.xml), [desk_drawer/](desk_drawer/) | prismatic drawer asset for FlowBot3D |
-| generated by [door_kinematic_scene.py](door_kinematic_scene.py) | checkerboard door in an enclosed room, for OMIP |
+| [door.xml](../scenes/door.xml) | the standard door; the plant for line A and Stage 1 |
+| [door_small.xml](../scenes/door_small.xml) | half-size panel; used by the size/weight sweep. Compatible with Stage 1's `doors.model_paths`, but it changes the handle moment arm — re-check the recorded action scale if you add it |
+| [door_scene.xml](../scenes/door_scene.xml) | door with floor/walls for rendering |
+| [door_iiwa_scene.xml](../scenes/door_iiwa_scene.xml) | door + KUKA iiwa 14 welded at the handle |
+| [kuka_iiwa_14/](../scenes/kuka_iiwa_14/) | arm meshes and `scene.xml` |
+| [camera_scene.xml](../scenes/camera_scene.xml), [rgbd_camera.xml](../scenes/rgbd_camera.xml) | standalone RGB-D camera test scenes |
+| [desk_drawer_scene.xml](../scenes/desk_drawer_scene.xml), [desk_drawer/](../scenes/desk_drawer/) | prismatic drawer asset for FlowBot3D |
+| generated by [door_kinematic_scene.py](../perception/omip/door_kinematic_scene.py) | checkerboard door in an enclosed room, for OMIP |
 
 ---
 
@@ -545,14 +586,14 @@ wrong, or the extension is not built. Check which CPython the `.so` targets:
 `file $OMIP_REPO_ROOT/omip_core/build/python/*.so`.
 
 **FlowBot3D scripts hang or fail with a subprocess error.** Check the three paths
-at the top of [flowbot3d_bridge.py](flowbot3d_bridge.py): the venv interpreter,
+at the top of [flowbot3d_bridge.py](../perception/flowbot3d/flowbot3d_bridge.py): the venv interpreter,
 the query CLI, and the checkpoint. The bridge passes point clouds through temp
 `.npz` files, so a silent failure is usually a bad path rather than a bad point
 cloud.
 
 **Viewer windows crash with a `texid` / `texuniform` attribute error.**
 `mujoco_viewer` 0.1.4 sets `mjvGeom` fields that this MuJoCo version dropped.
-[view_flowbot3d_interactive.py](view_flowbot3d_interactive.py) monkey-patches
+[view_flowbot3d_interactive.py](../perception/flowbot3d/view_flowbot3d_interactive.py) monkey-patches
 around it; reuse `_patched_add_marker_to_scene` if you write a new viewer.
 
 **A latent-mechanics result looks surprising.** Run that stage's `tests` module

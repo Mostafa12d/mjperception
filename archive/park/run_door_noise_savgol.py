@@ -23,7 +23,7 @@ import mujoco
 import matplotlib.pyplot as plt
 from scipy.signal import savgol_coeffs
 
-from run_door_dynamics_validation import (
+from baseline.run_door_dynamics_validation import (
     DT,
     HANDLE_DIST,
     load_model,
@@ -33,7 +33,7 @@ from run_door_dynamics_validation import (
     rls_init,
     rls_step,
 )
-from run_door_adaptive_impedance import (
+from baseline.run_door_adaptive_impedance import (
     CREEP_TORQUE,
     RLS_LAM,
     I_HAT_INIT,

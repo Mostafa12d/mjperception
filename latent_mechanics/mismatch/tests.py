@@ -20,7 +20,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics import door_sampler
 from latent_mechanics.config import load_config as load_stage1_config
 from latent_mechanics.data_gen import episode_length

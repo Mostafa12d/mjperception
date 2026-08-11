@@ -50,9 +50,10 @@ from latent_mechanics.mismatch.perturbations import (
     StribeckFriction,
     smooth_sign,
 )
+from scenes import scene_path
 
 ASSETS = Path(__file__).parent / "assets"
-DOOR_XML = "door.xml"  # repo root, reused unchanged
+DOOR_XML = "door.xml"  # lives in scenes/, resolved by FamilySpec.resolve_xml
 
 
 # ---------------------------------------------------------------------------
@@ -140,8 +141,15 @@ class FamilySpec:
     observed_joint: str = "hinge"
 
     def resolve_xml(self) -> str:
+        """Absolute path to this family's XML.
+
+        Stage-4 families ship their own asset next to this module; the four door
+        families reuse the shared ``scenes/door.xml``. Both branches return an
+        absolute path, so a cached ``MechanismParams`` stays loadable regardless
+        of the working directory.
+        """
         p = ASSETS / self.xml
-        return str(p) if p.exists() else self.xml
+        return str(p) if p.exists() else scene_path(self.xml)
 
 
 FAMILIES: dict[str, FamilySpec] = {
@@ -233,7 +241,9 @@ def sample_params(
 
 def build_model(params: MechanismParams) -> mujoco.MjModel:
     """Instantiate one mechanism with its sampled mechanics."""
-    model = mujoco.MjModel.from_xml_path(params.xml)
+    # Resolved again rather than trusted: caches written before the scene files
+    # moved into scenes/ hold a bare "door.xml" in params.xml.
+    model = mujoco.MjModel.from_xml_path(scene_path(params.xml))
     bid = model.body("door").id
     model.body_mass[bid] *= params.density_scale
     model.body_inertia[bid] *= params.density_scale

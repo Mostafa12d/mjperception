@@ -26,7 +26,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics import door_sampler
 from latent_mechanics.config import ExperimentConfig, load_config
 from latent_mechanics.door_sampler import DoorParams

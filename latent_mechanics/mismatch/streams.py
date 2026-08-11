@@ -27,7 +27,7 @@ from typing import Sequence
 
 import numpy as np
 
-import run_door_dynamics_validation as dyn
+from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics import door_sampler
 from latent_mechanics.config import ExperimentConfig
 from latent_mechanics.data_gen import JOINT_RANGE, LIMIT_MARGIN, transitions_from_log
