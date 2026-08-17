@@ -1,20 +1,16 @@
-"""
-Stage 5: does offline mechanical diversity buy online adaptability?
+"""Stage 5: does offline mechanical diversity buy online adaptability?
 
-Trains one model per curriculum level on a FIXED instance budget, then evaluates
-every model on ONE fixed suite of unseen mechanisms. Architecture, latent
-dimension, optimiser and adaptation algorithm are identical throughout; the only
-variable is the mechanical diversity of the training mixture.
+One model per curriculum level on a FIXED instance budget, all evaluated on ONE
+fixed suite of unseen mechanisms. Only the training mixture's diversity varies.
 
 Per level and per test instance:
 
-  before   normalised error with the latent held at its prior (no adaptation)
+  before   normalised error with the latent held at its prior
   after    normalised error over the final quarter, with online adaptation
   gain     before / after
   steps    interactions to reach 1.5x the run's own final error
   failure  gain < 1, i.e. adaptation made things worse
 
-Run:
     python3.10 -m latent_mechanics.curriculum.study
     python3.10 -m latent_mechanics.curriculum.study --levels 1,4,7
 """
@@ -57,31 +53,16 @@ from latent_mechanics.online.rls_adaptor import RLSAdaptor
 from latent_mechanics.train import train as train_stage1
 
 
-# ---------------------------------------------------------------------------
-# Populations
-# ---------------------------------------------------------------------------
-
 def family_seed(base_seed: int, family: str) -> int:
-    """Per-family seed offset that is stable across processes.
-
-    Python's ``hash()`` on ``str`` is salted per interpreter unless
-    ``PYTHONHASHSEED`` is pinned, so the obvious ``base_seed + hash(fam)`` makes
-    the population draw depend on which process drew it. That is invisible while
-    a pickle is cached and silently irreproducible the moment it is not, which is
-    exactly the failure mode a seed is supposed to rule out. sha256 of the family
-    name is stable across processes, machines and Python versions.
-    """
+    """Per-family seed offset, from sha256 rather than ``hash()``, which is salted
+    per interpreter and would make the population draw process-dependent."""
     digest = hashlib.sha256(family.encode("utf-8")).hexdigest()
     return int(base_seed) + int(digest[:8], 16) % 10_000
 
 
 def build_pools(cc: CurriculumConfig, stage1_cfg, cache: Path, verbose=True) -> dict:
-    """Simulate a pool of training instances per family, once.
-
-    Levels subsample from these pools, so an instance that appears at two levels
-    is the *same* instance with the same trajectories. That removes sampling
-    noise from the comparison between levels.
-    """
+    """Simulate a pool of training instances per family, once. Levels subsample
+    from these, so a shared instance is the same instance with the same data."""
     if cache.exists():
         with open(cache, "rb") as f:
             pools = pickle.load(f)
@@ -141,10 +122,6 @@ def build_eval_suite(cc: CurriculumConfig, stage1_cfg, cache: Path, verbose=True
         print(f"  built fixed eval suite: {len(suite)} instances")
     return suite
 
-
-# ---------------------------------------------------------------------------
-# Evaluation
-# ---------------------------------------------------------------------------
 
 def _nrmse(err: np.ndarray, state: np.ndarray, nxt: np.ndarray, dim: int = 0) -> float:
     d = nxt - state
@@ -244,8 +221,6 @@ def write_csv(path: Path, rows: list[dict]) -> None:
     print(f"  table -> {path}")
 
 
-# ---------------------------------------------------------------------------
-
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out-dir", default=None)
@@ -293,10 +268,8 @@ def main() -> None:
         train_pops = []
         for fam, n in comp.items():
             train_pops.extend(pools[fam][:n])
-        # The eval suite is held out EXPLICITLY, not by family name. Levels 2-7
-        # train on doors while the suite also contains (different, unseen)
-        # doors, so a family-based split would silently promote those eval doors
-        # into training and the evaluation would stop being held out at all.
+        # the suite is held out EXPLICITLY: a family-based split would promote
+        # its unseen doors into training, since every level also trains on doors
         train_fams = list(dict.fromkeys(p.params.family for p in train_pops))
 
         npz = out / f"data_L{lv.index}.npz"

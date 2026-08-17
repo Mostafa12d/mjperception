@@ -1,40 +1,13 @@
-"""
-Online adaptor interfaces and the first (gradient-descent) implementation.
+"""Online adaptor interfaces and the gradient-descent implementation.
 
-Three layers, each earning its place:
+``OnlineAdaptor`` is the streaming-estimator contract (predict, then observe),
+mentioning nothing about latents, so the RLS baseline implements it too.
+``OnlineLatentAdaptor`` adds "the belief is a latent fed to a frozen network" and
+leaves one abstract slot, ``_update``. ``GradientLatentAdaptor`` fills it by
+backpropagating into ``z`` only.
 
-``OnlineAdaptor``
-    The streaming-estimator contract: ``predict`` a next state from the current
-    belief, then ``observe`` a real transition and revise that belief. Nothing
-    here mentions latents, gradients or neural networks. Both the latent adaptor
-    and the RLS baseline implement it, which is what lets Experiment 3 drive
-    both with identical code on identical data.
-
-``OnlineLatentAdaptor``
-    Adds "the belief IS a latent vector fed to a frozen dynamics network".
-    Implements ``predict``, latent access, reset and the frozen-network
-    guarantees once. Leaves exactly one abstract method, ``_update``, which is
-    the algorithm slot.
-
-``GradientLatentAdaptor``
-    The first ``_update``: backprop the prediction loss into ``z`` only.
-
-Future update rules subclass ``OnlineLatentAdaptor`` and implement ``_update``:
-
-  * **Kalman / EKF** -- treat ``z`` as a Gaussian state. ``_update`` linearises
-    the frozen network around the current ``z`` (``torch.autograd.functional.jacobian``
-    of the prediction w.r.t. ``z``, which is cheap: 2 x embed_dim) and applies the
-    standard measurement update. Store the covariance and return it from
-    ``belief()``, which already exists for that purpose.
-  * **Learned updater** -- ``_update`` calls a trained network
-    ``(z, state, action, error) -> dz``. No other machinery changes.
-  * **Bayesian / particle** -- keep a particle set instead of a point ``z``;
-    ``latent`` returns the posterior mean and ``belief()`` the full set.
-
-The one thing every implementation must preserve is the frozen network. That is
-enforced here, not left to each subclass: ``_assert_frozen`` runs at
-construction and ``assert_network_unchanged`` compares a parameter checksum
-against the value captured before any adaptation.
+The frozen network is enforced here rather than per subclass: ``_assert_frozen``
+at construction, ``assert_network_unchanged`` against a parameter checksum.
 """
 
 from __future__ import annotations
@@ -55,14 +28,8 @@ ArrayLike = np.ndarray | torch.Tensor | list | tuple
 
 @dataclass
 class AdaptorStep:
-    """Record of one online interaction.
-
-    ``prediction`` is made with the belief held *before* this transition was
-    seen, so ``error`` is a genuine one-step-ahead prediction error and never
-    reports on data the estimator has already fitted. This prequential protocol
-    is what makes the learning curves in Experiment 1 and the comparison in
-    Experiment 3 honest.
-    """
+    """One online interaction. ``prediction`` uses the belief held BEFORE this
+    transition, so ``error`` is a genuine prequential one-step-ahead error."""
 
     prediction: np.ndarray  # (2,) predicted next state, before the update
     target: np.ndarray  # (2,) observed next state
@@ -81,10 +48,6 @@ def _as_tensor(x: ArrayLike, dim: int, device) -> torch.Tensor:
     t = torch.as_tensor(np.asarray(x, dtype=np.float32), device=device)
     return t.reshape(1, dim)
 
-
-# ---------------------------------------------------------------------------
-# Layer 1: the generic streaming-estimator contract
-# ---------------------------------------------------------------------------
 
 class OnlineAdaptor(ABC):
     """A streaming one-step-ahead predictor whose belief improves with data."""
@@ -106,8 +69,7 @@ class OnlineAdaptor(ABC):
         """Return to the prior belief, forgetting everything observed."""
 
     def belief(self) -> dict[str, Any]:
-        """Current belief. Point estimators return only a mean; a Kalman or
-        Bayesian implementation fills in ``cov`` / particles here."""
+        """Current belief. Point estimators return only a mean."""
         return {"mean": None, "cov": None}
 
     @property
@@ -115,22 +77,11 @@ class OnlineAdaptor(ABC):
         return getattr(self, "_n_updates", 0)
 
 
-# ---------------------------------------------------------------------------
-# Layer 2: belief = a latent vector into a frozen dynamics network
-# ---------------------------------------------------------------------------
-
 class OnlineLatentAdaptor(OnlineAdaptor):
     """Adapts a mechanics embedding for one object against a frozen network.
 
-    Subclasses implement ``_update`` and nothing else. Everything shared --
-    prediction, latent bookkeeping, reset, and the frozen-network guarantee --
-    lives here so no future update rule can accidentally drop it.
-
-    Args:
-        model: a trained stage-1 ``MechanicsDynamicsModel``. Frozen in place.
-        init: starting latent, ``(embed_dim,)``. Defaults to zeros, which is a
-            poor prior -- see ``latent_mechanics.online.init_strategies``.
-        device: torch device.
+    Subclasses implement ``_update`` and nothing else. ``init`` defaults to zeros,
+    which is a poor prior -- see ``latent_mechanics.online.init_strategies``.
     """
 
     name = "latent"
@@ -166,14 +117,8 @@ class OnlineLatentAdaptor(OnlineAdaptor):
             return float(sum(p.double().abs().sum() for p in self.model.parameters()))
 
     def assert_network_unchanged(self, tol: float = 0.0) -> None:
-        """Raise if any network weight moved since construction.
-
-        Call after an adaptation run. ``requires_grad=False`` already prevents
-        an optimiser from touching these tensors, but this catches the subtler
-        failure modes too: an optimiser constructed over ``model.parameters()``
-        by mistake, an in-place buffer write, or a future ``_update`` that
-        decides to fine-tune "just the last layer".
-        """
+        """Raise if any network weight moved since construction. Catches what
+        ``requires_grad=False`` does not: stray optimisers, in-place writes."""
         now = self._param_checksum()
         if abs(now - self._param_checksum0) > tol:
             raise RuntimeError(
@@ -222,11 +167,8 @@ class OnlineLatentAdaptor(OnlineAdaptor):
     def _update(
         self, state: torch.Tensor, action: torch.Tensor, next_state: torch.Tensor
     ) -> tuple[float, dict[str, Any]]:
-        """Revise ``self._z`` from one transition. Returns ``(loss, extras)``.
-
-        Inputs are ``(1, d)`` tensors on the right device. Implementations must
-        leave every network parameter untouched.
-        """
+        """Revise ``self._z`` from one ``(1, d)`` transition -> ``(loss, extras)``.
+        Must leave every network parameter untouched."""
 
     def observe(
         self, state: ArrayLike, action: ArrayLike, next_state: ArrayLike
@@ -255,40 +197,15 @@ class OnlineLatentAdaptor(OnlineAdaptor):
         )
 
 
-# ---------------------------------------------------------------------------
-# Layer 3: first implementation -- gradient descent on z
-# ---------------------------------------------------------------------------
-
 class GradientLatentAdaptor(OnlineLatentAdaptor):
-    """Online SGD/Adam on the latent, with a bounded window of recent data.
+    """Online SGD/Adam on the latent, over a bounded sliding window.
 
-    Args:
-        lr: latent learning rate.
-        optimizer: ``"adam"`` or ``"sgd"``.
-        n_inner_steps: gradient steps taken per observed transition.
-        window: how many of the most recent transitions each gradient step uses.
-            ``1`` is pure single-sample online SGD. Larger values are still
-            online -- the window is bounded and slides, so the cost per update
-            is constant and no full trajectory is ever revisited -- but they cut
-            the gradient noise that single-sample updates suffer from at the
-            50 Hz sample rate, where consecutive transitions are individually
-            almost uninformative.
-        prior_weight: strength of an L2 pull toward ``prior_center``. Acts as the
-            regulariser that keeps ``z`` in the region the network was trained
-            on while evidence is still scarce, and is the natural place a proper
-            Bayesian prior would enter.
-        prior_center: defaults to the initial latent.
-        loss_space: ``"normalized"`` (default, matching stage-1 training) or
-            ``"raw"``.
-        max_grad_norm: clip on the latent gradient; 0 disables.
-        lr_decay: step size follows ``lr / (1 + lr_decay * t)``. This is the
-            Robbins-Monro condition, and it is not cosmetic here. At a constant
-            step size the latent keeps jittering around the optimum forever, and
-            measurably so: starting from an already-good init, constant-rate
-            adaptation ends up *worse* than not adapting at all (0.95x on the
-            shipped checkpoint) because the noise it injects exceeds the
-            information it extracts. With decay it improves from every
-            initialisation tested.
+    ``window`` > 1 is still online (bounded, constant cost per update) but cuts
+    the gradient noise of single-sample updates at 50 Hz. ``prior_weight`` is an
+    L2 pull toward ``prior_center``, keeping ``z`` in the trained region while
+    evidence is scarce. ``lr_decay`` gives ``lr / (1 + lr_decay * t)``, the
+    Robbins-Monro condition: at a constant step size the latent jitters forever
+    and adaptation from a good init ends up worse than not adapting.
     """
 
     name = "latent-gd"
@@ -327,9 +244,7 @@ class GradientLatentAdaptor(OnlineLatentAdaptor):
         self._buffer: deque[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] = deque(
             maxlen=self.window
         )
-        # The optimiser is built over EXACTLY ONE tensor: the latent. This is the
-        # single most important line for the frozen-network guarantee -- there is
-        # no code path by which it could reach a network weight.
+        # built over exactly one tensor, the latent: no path to a network weight
         if self.optimizer_name == "adam":
             self._opt = torch.optim.Adam([self._z], lr=self.lr)
         elif self.optimizer_name == "sgd":
@@ -391,16 +306,8 @@ class GradientLatentAdaptor(OnlineLatentAdaptor):
 
 
 class StaticLatentAdaptor(OnlineLatentAdaptor):
-    """Never updates. The control condition for every experiment.
-
-    Without this, "the error went down" is not evidence of anything -- a stream
-    that happens to get easier over time would produce the same curve. Running
-    the identical latent with updates disabled isolates what adaptation actually
-    contributed, and it is what revealed that constant-step-size adaptation from
-    a good initialisation was a net loss.
-
-    It is also the smallest possible example of the ``_update`` contract.
-    """
+    """Never updates. The control for every experiment: without it, "the error
+    went down" could just mean the stream got easier."""
 
     name = "static"
 

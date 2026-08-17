@@ -1,14 +1,9 @@
-"""
-Randomised door instances.
+"""Randomised door instances.
 
-A *door* is one draw of hidden mechanics (inertia, friction, damping, spring).
-It is the thing a latent embedding is supposed to describe, so its parameters
-are fixed across all of that door's episodes.
-
-Model construction reuses ``run_door_dynamics_validation.load_model`` (the RLS
-baseline's loader, untouched) and only layers on the torsional spring, which
-that loader does not expose. Springs are set through the MuJoCo model fields
-rather than by editing XML, exactly like the loader does for mass and friction.
+A door is one draw of hidden mechanics (inertia, friction, damping, spring),
+fixed across all of that door's episodes. Models come from the baseline's
+``dyn.load_model``; only the torsional spring is layered on here, set through the
+MuJoCo model fields rather than by editing XML.
 """
 
 from __future__ import annotations
@@ -22,8 +17,7 @@ import numpy as np
 from baseline import run_door_dynamics_validation as dyn
 from latent_mechanics.config import DoorSamplingConfig
 
-# Physical parameters recorded per door. Order defines the column order of the
-# ``door_params`` table saved into the dataset.
+# order defines the column order of the saved ``door_params`` table
 PARAM_FIELDS: tuple[str, ...] = (
     "density",
     "frictionloss",
@@ -32,7 +26,6 @@ PARAM_FIELDS: tuple[str, ...] = (
     "springref",
 )
 
-# Ground-truth derived quantities recorded alongside the raw parameters.
 DERIVED_FIELDS: tuple[str, ...] = ("mass", "I_hinge")
 
 
@@ -63,8 +56,7 @@ class DoorParams:
 def sample_door_params(
     cfg: DoorSamplingConfig, rng: np.random.Generator, door_id: int
 ) -> DoorParams:
-    """Draw one door. Density is log-uniform so light and heavy doors are equally
-    represented on the scale that matters for inertia."""
+    """Draw one door. Density is log-uniform, the scale that matters for inertia."""
     lo, hi = cfg.density_range
     density = float(np.exp(rng.uniform(np.log(lo), np.log(hi))))
     stiffness = (
@@ -86,11 +78,8 @@ def sample_door_params(
 def sample_door_population(
     cfg: DoorSamplingConfig, seed: int
 ) -> tuple[list[DoorParams], list[DoorParams]]:
-    """Sample the training population and the held-out (stage-2) population.
-
-    Held-out doors get ids continuing after the training ids so that a training
-    door's id is always a valid embedding-table row index.
-    """
+    """Training and held-out populations. Held-out ids continue after the training
+    ids, so a training id is always a valid embedding-table row."""
     rng = np.random.default_rng(seed)
     train = [sample_door_params(cfg, rng, i) for i in range(cfg.n_train_doors)]
     heldout = [
@@ -101,11 +90,8 @@ def sample_door_population(
 
 
 def build_model(params: DoorParams) -> mujoco.MjModel:
-    """Instantiate the MuJoCo model for one door.
-
-    ``dyn.load_model`` handles density / frictionloss / damping and recomputes
-    derived constants; we add the torsional spring on top and recompute again.
-    """
+    """MuJoCo model for one door: ``dyn.load_model`` for density/friction/damping,
+    then the torsional spring on top."""
     model = dyn.load_model(
         density=params.density,
         frictionloss=params.frictionloss,
@@ -122,11 +108,8 @@ def build_model(params: DoorParams) -> mujoco.MjModel:
 
 
 def ground_truth(model: mujoco.MjModel, params: DoorParams) -> dict[str, float]:
-    """True hinge-frame mechanics, for reporting and for colouring the latent space.
-
-    The inertia/mass computation is the baseline's ``true_hinge_inertia`` so the
-    numbers here are directly comparable to the RLS estimates.
-    """
+    """True hinge-frame mechanics, via the baseline's ``true_hinge_inertia`` so the
+    numbers stay comparable to the RLS estimates."""
     gt = dyn.true_hinge_inertia(model)
     return {
         "density": params.density,

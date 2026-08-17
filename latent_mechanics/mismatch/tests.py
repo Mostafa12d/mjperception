@@ -1,17 +1,9 @@
-"""
-Self-checks for the Stage-3 robustness study.
+"""Self-checks for the Stage-3 robustness study.
 
-The load-bearing one is ``test_simulator_equivalence``. Stage 3 needs its own
-integration loop for state-dependent physics, and if that loop drifted from
-``dyn.simulate`` even slightly, the drift would be indistinguishable from a real
-mismatch effect and would silently corrupt every result. It is asserted to be
-exact, not approximate.
+The load-bearing one is ``test_simulator_equivalence``: drift between Stage 3's
+own loop and ``dyn.simulate`` would be indistinguishable from a real mismatch
+effect, so equality is asserted exactly. The rest guard the measurement protocol.
 
-The rest guard the measurement protocol: that perturbations are genuinely off at
-level zero, that sensor corruption is applied to a state *sequence* rather than
-to transitions independently, and that scoring recovers the true error.
-
-Run:
     python3.10 -m latent_mechanics.mismatch.tests
 """
 
@@ -55,8 +47,6 @@ def _door(idx: int = 0):
     train, held = door_sampler.sample_door_population(cfg.doors, cfg.sim.seed)
     return cfg, held[idx]
 
-
-# ---------------------------------------------------------------------------
 
 def test_simulator_equivalence() -> None:
     print("\nPerturbed simulator == dyn.simulate when nothing is perturbed")

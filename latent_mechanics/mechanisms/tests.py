@@ -1,13 +1,9 @@
-"""
-Self-checks for the Stage-4 mechanism suite.
+"""Self-checks for the Stage-4 mechanism suite.
 
-The claim this stage rests on is "every mechanism exposes the same interaction
-interface". That is only meaningful if it is checkable, so the tests assert it
-directly: one state/action shape for all six families, one code path through the
-simulator with no per-family branching, and no mechanism label or physical
-parameter reachable from anything the model consumes.
+These assert the claim the stage rests on directly: one state/action shape for
+all six families, one simulator code path with no per-family branching, and no
+label or physical parameter reachable from anything the model consumes.
 
-Run:
     python3.10 -m latent_mechanics.mechanisms.tests
 """
 
@@ -40,8 +36,6 @@ def _one(fam: str, idx: int = 0):
     rng = np.random.default_rng(idx)
     return lib.sample_params(fam, rng, idx)
 
-
-# ---------------------------------------------------------------------------
 
 def test_all_families_build() -> None:
     print("\nEvery family builds and exposes one joint")
@@ -99,9 +93,7 @@ def test_bifold_is_underactuated() -> None:
         d.qfrc_applied[obs_dof] = 8.0
         mujoco.mj_step(m2, d)
         leaf.append(float(d.qpos[m2.jnt_qposadr[m2.joint("leaf_hinge").id]]))
-    # The leaf must swing appreciably: if it stayed put, the "two-link" family
-    # would just be a heavier door and the partial-observability claim would be
-    # false. Measured travel on this instance is ~2 rad.
+    # a leaf that stayed put would make bifold a heavier door, not a 2-link one
     check("the unobserved leaf has its own dynamics",
           float(np.ptp(leaf)) > 0.1, f"leaf travel {np.ptp(leaf):.2e}")
 
@@ -229,14 +221,8 @@ def test_analysis_metrics() -> None:
 
 
 def test_near_limit_uses_each_familys_own_range() -> None:
-    """A2: the near-limit flag must reflect the mechanism's real joint range.
-
-    ``data_gen.JOINT_RANGE`` is the door's ``[-0.17, 2.09]``. A drawer travels
-    ``[0, 0.5] m`` and a laptop hinge ``[0, 2.2] rad``, so scoring either against
-    the door range flags nothing however hard the mechanism is jammed against its
-    stop. This asserts the flag now matches the family's own range, and that the
-    door default is unchanged.
-    """
+    """The near-limit flag must use the mechanism's own joint range, not the door
+    default, which would flag nothing on a jammed drawer."""
     import mujoco
 
     from latent_mechanics.config import ExperimentConfig
@@ -290,13 +276,8 @@ def test_near_limit_uses_each_familys_own_range() -> None:
 
 
 def test_moving_fraction_is_unit_invariant() -> None:
-    """A3: "% moving" must not depend on the unit the velocity is expressed in.
-
-    The old absolute ``|v| > 0.02`` was applied unchanged to the drawer's m/s and
-    the revolute families' rad/s, so the figure was not comparable across
-    families. The relative rule already used by ``describe_population`` is now
-    shared by all three call sites.
-    """
+    """"% moving" must not depend on the unit the velocity is expressed in, or the
+    drawer's m/s and the revolute families' rad/s are not comparable."""
     from latent_mechanics.data_gen import MOVING_FRAC_OF_P95, moving_fraction
 
     print("\n'% moving' is invariant to the velocity unit")
@@ -339,14 +320,10 @@ def test_moving_fraction_is_unit_invariant() -> None:
 
 
 def test_time_resolution_matches_baseline() -> None:
-    """B3: TimeResolution(10, 1) must be a bit-exact drop-in for the current path.
+    """TimeResolution(10, 1) must be a bit-exact drop-in for the default path.
 
-    ``rollout_at_resolution`` cannot reuse ``simulate_mechanism`` +
-    ``transitions_from_log`` (both read ``dyn.DT`` from module scope), so it
-    reimplements the loop with an explicit timestep. That is only safe if the
-    default resolution reproduces the existing rollout exactly -- including the
-    slicing convention, where the first recorded transition spans the end of
-    block 0 to the end of block 1 and carries block 1's action.
+    ``rollout_at_resolution`` reimplements the loop with an explicit timestep, so
+    this is what makes that reimplementation safe -- slicing convention included.
     """
     from latent_mechanics.config import ExperimentConfig
     from latent_mechanics.mechanisms.rollout import rollout_mechanism

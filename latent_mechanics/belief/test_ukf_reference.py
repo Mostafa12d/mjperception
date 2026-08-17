@@ -1,18 +1,8 @@
-"""
-STEP 3 CHECKPOINT: validate the UKF core against filterpy's reference.
+"""Validate the UKF core against filterpy 1.4.5 on synthetic nonlinear systems.
 
-Nothing here touches the learned predictor, the latent basis, or any project
-data. The point is to establish that the filter is numerically correct as a
-filter, on synthetic nonlinear systems, before it is trusted with anything real.
+Agreement is asserted to 1e-10 on every intermediate quantity, not just the final
+estimate: a filter can look plausible while getting the gain subtly wrong.
 
-The comparison is against ``filterpy.kalman.UnscentedKalmanFilter`` with
-``MerweScaledSigmaPoints`` (Labbe, filterpy 1.4.5). Agreement is asserted to
-1e-10 on every intermediate quantity, not just the final estimate -- sigma
-points, weights, prior mean/covariance, innovation, innovation covariance,
-Kalman gain and posterior -- because a filter can produce a plausible-looking
-trajectory while getting the gain subtly wrong.
-
-Run:
     python3.10 -m latent_mechanics.belief.test_ukf_reference
 """
 
@@ -45,10 +35,6 @@ def close(a, b, tol=TOL) -> tuple[bool, str]:
     return err <= tol, f"max abs diff {err:.3e}"
 
 
-# ---------------------------------------------------------------------------
-# Synthetic systems
-# ---------------------------------------------------------------------------
-
 def fx_nl(x, dt=1.0):
     """Mildly nonlinear 3-state process."""
     return np.array([
@@ -62,8 +48,6 @@ def hx_nl(x):
     """2-D nonlinear measurement."""
     return np.array([np.sqrt(x[0] ** 2 + x[1] ** 2 + 1.0), np.arctan2(x[1], x[0] + 3.0)])
 
-
-# ---------------------------------------------------------------------------
 
 def test_sigma_points_and_weights() -> None:
     print("\nSigma points and weights vs filterpy")
@@ -180,15 +164,10 @@ def test_batched_hx_matches_pointwise() -> None:
 
 
 def test_linear_case_equals_kalman() -> None:
-    """On a linear system, which UKF variant reproduces the exact Kalman filter?
+    """Which UKF variant reproduces the exact Kalman filter on a linear system.
 
-    The filterpy convention reuses the fx-propagated sigma points for the
-    measurement update, so those points carry covariance F P F^T while the prior
-    covariance is F P F^T + Q. The gain is therefore computed without the process
-    noise and the filter is NOT exactly the Kalman filter when Q != 0 -- it is
-    when Q = 0. Regenerating the sigma points from the prior restores exactness.
-    Both behaviours are asserted, because the difference is a design choice this
-    branch has to make deliberately rather than inherit.
+    filterpy's reused sigma points carry F P F^T, not F P F^T + Q, so it is exact
+    only when Q = 0; regenerating from the prior is exact for any Q.
     """
     print("\nLinear system: which variant equals the textbook Kalman filter?")
     rng = np.random.default_rng(4)
@@ -247,9 +226,101 @@ def test_numerical_hygiene() -> None:
           f"{float(np.max(np.abs(cov - np.eye(2)))):.3e}")
 
 
+def test_iterated_update() -> None:
+    """IPLF correctness. On affine ``h`` the result must equal the exact Kalman
+    update for ANY iteration count, or the measurement is being counted twice."""
+    print("\nIterated posterior linearisation (IPLF)")
+    rng = np.random.default_rng(7)
+    n, m = 4, 2
+    H = rng.normal(size=(m, n))
+    c = rng.normal(size=m)
+    x0, z = rng.normal(size=n), rng.normal(size=m)
+    A = rng.normal(size=(n, n))
+    P0 = A @ A.T + n * np.eye(n)          # deliberately wide
+    B = rng.normal(size=(m, m))
+    R = B @ B.T + np.eye(m)
+
+    # textbook Kalman update
+    S_ref = H @ P0 @ H.T + R
+    K_ref = P0 @ H.T @ np.linalg.inv(S_ref)
+    x_ref = x0 + K_ref @ (z - (H @ x0 + c))
+    P_ref = P0 - K_ref @ S_ref @ K_ref.T
+
+    for iters in (1, 2, 5):
+        f = UnscentedKalmanFilter(
+            dim_x=n, dim_z=m, points=MerweSigmaPoints(n, 1.0, 2.0, 0.0),
+            fx=None, Q=np.zeros((n, n)), R=R, x0=x0, P0=P0)
+        f.predict()
+        f.iterated_update(z, R=R, hx_batch=lambda S: S @ H.T + c,
+                          n_iterations=iters, tol=0.0)
+        check(f"linear h, {iters} iteration(s): mean equals exact KF",
+              np.allclose(f.x, x_ref, atol=1e-9),
+              f"max diff {np.max(np.abs(f.x - x_ref)):.3e}")
+        check(f"linear h, {iters} iteration(s): covariance equals exact KF",
+              np.allclose(f.P, P_ref, atol=1e-9),
+              f"max diff {np.max(np.abs(f.P - P_ref)):.3e}")
+
+    # nonlinear: residual must fall, but P must not shrink past the 1-shot bound
+    hx = lambda S: np.stack([np.sin(S[:, 0]) + S[:, 1] ** 2,
+                             np.tanh(S[:, 2]) * S[:, 3]], axis=-1)
+    res, traces = [], []
+    for iters in (1, 3, 8):
+        f = UnscentedKalmanFilter(
+            dim_x=n, dim_z=m, points=MerweSigmaPoints(n, 1.0, 2.0, 0.0),
+            fx=None, Q=np.zeros((n, n)), R=R, x0=x0, P0=P0)
+        f.predict()
+        st = f.iterated_update(z, R=R, hx_batch=hx, n_iterations=iters, tol=0.0)
+        res.append(float(np.linalg.norm(st.y_post)))
+        traces.append(float(np.trace(f.P)))
+    check("nonlinear h: iterating reduces the post-update residual",
+          res[-1] < res[0], f"{res[0]:.4f} -> {res[-1]:.4f}")
+    check("nonlinear h: iterating does not shrink P below the 1-shot bound "
+          "(measurement not double-counted)",
+          traces[-1] > 0.25 * traces[0], f"{traces[0]:.4f} -> {traces[-1]:.4f}")
+    check("nonlinear h: posterior stays PD",
+          np.linalg.eigvalsh(f.P).min() > 0)
+
+
+def test_residual_noise_model() -> None:
+    """The residual form must be PSD-by-construction and respect its floor."""
+    print("\nResidual-form adaptive R")
+    from latent_mechanics.belief.noise import (IRREDUCIBLE_R,
+                                               InnovationAdaptiveNoise,
+                                               ResidualAdaptiveNoise)
+    from latent_mechanics.belief.ukf import psd_floor
+
+    rng = np.random.default_rng(0)
+    # Pzz deliberately larger than the residual spread: drives the innovation
+    # form indefinite
+    Pzz = np.array([[2.0, 0.1], [0.1, 3.0]])
+    old = InnovationAdaptiveNoise(dim_z=2, dim_x=4, window=50, floor=1e-6)
+    new = ResidualAdaptiveNoise(dim_z=2, dim_x=4, window=50)
+    for _ in range(200):
+        e = rng.normal(size=2) * 0.05
+        old.observe(e, Pzz)
+        new.observe(e, Pzz, residual=e)
+
+    check("innovation form drives R to its floor here",
+          float(np.linalg.eigvalsh(old.R()).min()) <= 1.001e-6)
+    check("residual form stays strictly above the floor",
+          float(np.linalg.eigvalsh(new.R()).min()) > 1e-3)
+    check("residual form respects the matrix floor (Loewner order)",
+          float(np.linalg.eigvalsh(new.R() - IRREDUCIBLE_R).min()) > -1e-12)
+
+    F = IRREDUCIBLE_R
+    tiny = 1e-9 * np.eye(2)
+    check("psd_floor lifts a too-small matrix to the floor",
+          np.allclose(psd_floor(tiny, F), F, atol=1e-10))
+    big = 100 * F
+    check("psd_floor leaves an already-large matrix alone",
+          np.allclose(psd_floor(big, F), big, atol=1e-9))
+    check("psd_floor output is PD",
+          np.linalg.eigvalsh(psd_floor(tiny, F)).min() > 0)
+
+
 def main() -> None:
     print("=" * 74)
-    print("STEP 3 CHECKPOINT -- UKF core validated against filterpy 1.4.5")
+    print("UKF core validated against filterpy 1.4.5")
     print("=" * 74)
     test_sigma_points_and_weights()
     test_unscented_transform()
@@ -257,6 +328,8 @@ def main() -> None:
     test_batched_hx_matches_pointwise()
     test_linear_case_equals_kalman()
     test_numerical_hygiene()
+    test_iterated_update()
+    test_residual_noise_model()
     print()
     if _FAILURES:
         print(f"{len(_FAILURES)} FAILED: {', '.join(_FAILURES)}")

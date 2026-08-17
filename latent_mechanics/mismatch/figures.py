@@ -1,11 +1,8 @@
-"""
-Publication-quality figures and tables for the Stage-3 robustness study.
+"""Figures and tables for the Stage-3 robustness study.
 
-Conventions kept consistent across every panel so figures can sit side by side
-in a paper: one fixed colour per method, log error axes (errors span decades),
-the Stage-1 ideal-plant reference drawn as a dotted line wherever an error axis
-appears, and shaded inter-quartile bands across doors rather than bare means, so
-the spread between doors is visible instead of averaged away.
+Conventions held across every panel: one fixed colour per method, log error axes,
+a dotted ideal-plant reference, and shaded inter-quartile bands across doors so
+the spread is visible rather than averaged away.
 """
 
 from __future__ import annotations
@@ -64,12 +61,8 @@ def _by_level(rows, sweep: Sweep, method: str, field: str):
 
 
 def _x_axis(sweep: Sweep):
-    """Positions and tick labels. Levels are plotted evenly spaced.
-
-    Severity levels are chosen on a roughly geometric grid, so even spacing
-    keeps every level legible instead of crushing the low ones together. The
-    actual values stay on the tick labels.
-    """
+    """Positions and tick labels. Levels are evenly spaced, since the severity grid
+    is roughly geometric; the real values stay on the tick labels."""
     xs = np.arange(len(sweep.levels))
     labels = ["off" if v in (None, 0, 0.0) else f"{v:g}" for v in sweep.levels]
     return xs, labels

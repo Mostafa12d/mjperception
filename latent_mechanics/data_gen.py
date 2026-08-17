@@ -1,17 +1,9 @@
-"""
-Dataset generation for the latent-mechanics dynamics model.
+"""Dataset generation for the latent-mechanics dynamics model.
 
-Trajectory generation is *not* reimplemented here. Every episode is rolled out
-by ``run_door_dynamics_validation.simulate`` -- the same integrator loop, the
-same handle-F/T -> hinge-torque reconstruction, and the same oracle kinematics
-the RLS baseline consumes. This module only:
+Episodes are rolled out by ``run_door_dynamics_validation.simulate`` rather than
+a reimplemented integrator. This samples doors and excitation, calls simulate,
+and slices the 500 Hz log into model-rate transitions tagged by door.
 
-  1. samples door instances and their torque excitation,
-  2. calls ``simulate``,
-  3. slices the 500 Hz log into ``(state, action, next_state)`` transitions at
-     the coarser model rate, tagged with the door they came from.
-
-Run:
     python3.10 -m latent_mechanics.data_gen --config configs/latent_mechanics.yaml
 """
 
@@ -36,18 +28,12 @@ from latent_mechanics.excitation import TorqueProfile, sample_profile
 SPLIT_TRAIN, SPLIT_VAL, SPLIT_HELDOUT_DOOR = 0, 1, 2
 SPLIT_NAMES = {SPLIT_TRAIN: "train", SPLIT_VAL: "val", SPLIT_HELDOUT_DOOR: "heldout_door"}
 
-# Joint limits of the door XMLs; transitions that touch them include a
-# constraint torque that is not part of the action, so they are flagged.
-# These are the *door* defaults. Any caller simulating another mechanism must
-# pass that mechanism's own range -- see ``transitions_from_log``.
+# Door-XML defaults. Other mechanisms must pass their own range; see
+# ``transitions_from_log``.
 JOINT_RANGE = (-0.17, 2.09)
 LIMIT_MARGIN = 0.05
 
-# "Moving" as a fraction of the joint's OWN speed scale. An absolute threshold
-# cannot work across joint types: 0.02 would be compared unchanged against the
-# drawer's m/s and a revolute joint's rad/s, so the reported "% moving" would not
-# be comparable between families. ``mechanisms.rollout.describe_population``
-# already used this relative rule; this is that rule, in one place.
+# "Moving" relative to the joint's own speed scale, so m/s and rad/s compare
 MOVING_FRAC_OF_P95 = 0.02
 
 
@@ -61,13 +47,8 @@ def moving_fraction(velocity: np.ndarray) -> float:
 
 @contextlib.contextmanager
 def episode_length(seconds: float):
-    """Temporarily set the episode length used by ``dyn.simulate``.
-
-    ``simulate`` reads ``T_END`` / ``N_STEPS`` from its module namespace, and we
-    are not allowed to edit that file. Overriding the two module attributes for
-    the duration of the call is how we reuse the baseline's integrator loop at a
-    configurable horizon instead of copying it. Values are always restored.
-    """
+    """Temporarily override ``dyn.T_END``/``N_STEPS``, which ``simulate`` reads from
+    its module namespace. Always restored."""
     old_t_end, old_n_steps = dyn.T_END, dyn.N_STEPS
     dyn.T_END = float(seconds)
     dyn.N_STEPS = int(round(seconds / dyn.DT))
@@ -86,20 +67,12 @@ def transitions_from_log(
 ) -> dict[str, np.ndarray]:
     """Slice a 500 Hz episode log into model-rate transitions.
 
-    ``simulate`` logs the state *after* step ``i``, and ``tau[i]`` is the torque
-    applied over ``[i*dt, (i+1)*dt)``. So logged index ``j`` holds the state at
-    time ``(j+1)*dt``, and a transition of length ``K`` starting there consumes
-    torques ``j+1 .. j+K``. Starting at ``j = K-1`` and striding by ``K`` makes
-    that span coincide exactly with one zero-order-hold block, which is what
-    makes the recorded action a single constant number.
+    ``simulate`` logs the state AFTER step i, and ``tau[i]`` covers
+    ``[i*dt, (i+1)*dt)``, so starting at ``j = K-1`` and striding by ``K`` makes
+    each transition span exactly one zero-order-hold block.
 
-    ``joint_range`` and ``limit_margin`` define the ``near_limit`` column, and
-    they default to the *door* XML's limits. They are parameters rather than
-    module constants because the door range is meaningless for the other
-    mechanisms: a drawer travels ``[0, 0.5] m`` and a laptop hinge ``[0, 2.2]
-    rad``, so the door's ``[-0.17, 2.09]`` flags nothing at all on a drawer that
-    is in fact sitting hard against its stop. Callers simulating a non-door
-    mechanism must pass that mechanism's own range.
+    ``joint_range`` defaults to the door XML's limits and MUST be overridden for
+    other mechanisms, whose travel is on a different scale entirely.
     """
     theta, theta_dot = log["theta"], log["theta_dot"]
     tau = log[tau_key]
@@ -113,13 +86,9 @@ def transitions_from_log(
     state = np.stack([theta[j], theta_dot[j]], axis=1)
     next_state = np.stack([theta[j + K], theta_dot[j + K]], axis=1)
 
-    # Action = the hinge torque held across the interval, averaged over the
-    # window. The commanded torque is an exact zero-order hold, but the logged
-    # hinge torque wobbles by ~1e-5 N*m inside a hold: ``simulate`` reconstructs
-    # it from site kinematics that mj_step leaves one integration step stale, so
-    # the moment arm and the force direction are evaluated an angle 2e-3*thetadot
-    # apart. That is ~1e-6 relative and far below any modelling error, but the
-    # check below still fires if a profile is genuinely not a ZOH.
+    # Averaged over the window: the logged hinge torque wobbles ~1e-5 N*m inside
+    # a hold because simulate reconstructs it from one-step-stale kinematics.
+    # The check below still fires if a profile is genuinely not a ZOH.
     window = np.stack([tau[j + 1 + k] for k in range(K)], axis=1)
     action = window.mean(axis=1, keepdims=True)
     spread = np.max(np.abs(window - action), axis=1)
@@ -214,8 +183,7 @@ def generate_dataset(cfg: ExperimentConfig, verbose: bool = True) -> dict:
             if is_heldout:
                 split = SPLIT_HELDOUT_DOOR
             else:
-                # Episode-level split: adjacent transitions are near-duplicates,
-                # so a random per-transition split would leak the validation set.
+                # split by episode; adjacent transitions are near-duplicates
                 split = (
                     SPLIT_VAL if ep >= sim.episodes_per_door - sim.val_episodes_per_door
                     else SPLIT_TRAIN

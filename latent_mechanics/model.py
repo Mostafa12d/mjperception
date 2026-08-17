@@ -1,22 +1,10 @@
-"""
-The learned dynamics model and the door embedding table.
+"""The learned dynamics model and the door embedding table.
 
-Two objects, kept deliberately separate:
-
-``MechanicsDynamicsModel``
-    A small MLP  ``(state, action, z) -> next_state``. It takes ``z`` as a plain
-    tensor. It has no embedding table, no door ids, no notion of how many doors
-    exist. That is the whole point: in stage 2 the same network is frozen and a
-    fresh ``z`` is optimised by gradient descent for an unseen door, and nothing
-    about the network needs to change.
-
-``DoorEmbeddingTable``
-    A lookup ``door_id -> z``, used *only* during stage-1 training. It is the
-    stage-1 way of producing a ``z``; an online optimiser is the stage-2 way.
-
-Normalisation lives inside the dynamics model as buffers, so a checkpoint is
-self-contained: load it, feed raw SI units, get raw SI units back. Stage-2 code
-does not have to carry dataset statistics around.
+``MechanicsDynamicsModel`` is an MLP ``(state, action, z) -> next_state`` that
+takes ``z`` as a plain tensor and knows nothing about door ids, so stage 2 can
+freeze it and optimise a fresh ``z``. ``DoorEmbeddingTable`` is the stage-1
+``door_id -> z`` lookup. Normalisation lives in the model as buffers, so a
+checkpoint takes and returns raw SI units.
 """
 
 from __future__ import annotations
@@ -43,11 +31,7 @@ _ACTIVATIONS = {
 
 
 class NormStats(dict):
-    """Per-dimension mean/std for state, action and state-delta.
-
-    Plain dict of tensors with fixed keys; kept as a type for readability at
-    call sites and so ``from_dataset`` has an obvious home.
-    """
+    """Per-dimension mean/std for state, action and state-delta."""
 
     KEYS = ("state_mean", "state_std", "action_mean", "action_std",
             "delta_mean", "delta_std")
@@ -74,20 +58,10 @@ def _mlp(in_dim: int, hidden: list[int], out_dim: int, act: str, dropout: float)
 
 
 class MechanicsDynamicsModel(nn.Module):
-    """One-step dynamics conditioned on a latent mechanics vector.
+    """One-step dynamics ``next_state = f(state, action, z)``.
 
-        next_state = f(state, action, z)
-
-    Args:
-        embed_dim: width of ``z``.
-        hidden_sizes: MLP widths.
-        predict_delta: if True the head outputs ``next_state - state`` (in
-            normalised units) and the delta is added back to the input state.
-            Strongly recommended: over one 20 ms model step the state barely
-            changes, so predicting the state directly makes the identity map a
-            near-optimal solution and the model learns nothing about mechanics.
-        norm_stats: per-dimension statistics; see ``NormStats``. Stored as
-            buffers so they travel with the checkpoint.
+    ``predict_delta`` is strongly recommended: over one 20 ms step the state
+    barely changes, so predicting it directly makes the identity near-optimal.
     """
 
     def __init__(
@@ -130,8 +104,7 @@ class MechanicsDynamicsModel(nn.Module):
 
     # -- normalisation ----------------------------------------------------
     def set_norm_stats(self, stats: dict[str, torch.Tensor]) -> None:
-        """Install dataset statistics. Stds are floored to avoid dividing by ~0
-        on a dimension that happens to be constant in a small dataset."""
+        """Install dataset statistics. Stds are floored against constant dimensions."""
         for key in NormStats.KEYS:
             if key not in stats:
                 raise ValueError(f"norm_stats missing '{key}'")
@@ -159,12 +132,8 @@ class MechanicsDynamicsModel(nn.Module):
     def raw_output(
         self, state: torch.Tensor, action: torch.Tensor, z: torch.Tensor
     ) -> torch.Tensor:
-        """Network output in *normalised* units.
-
-        With ``predict_delta`` this is the normalised state delta; otherwise the
-        normalised next state. Training uses this directly so the loss is well
-        scaled across angle and velocity.
-        """
+        """Network output in normalised units: the state delta, or the next state
+        if ``predict_delta`` is off. Training uses this directly."""
         state, action, z = _match_batch(state, action, z)
         x = torch.cat(
             [self.normalize_state(state), self.normalize_action(action), z], dim=-1
@@ -174,17 +143,8 @@ class MechanicsDynamicsModel(nn.Module):
     def forward(
         self, state: torch.Tensor, action: torch.Tensor, z: torch.Tensor
     ) -> torch.Tensor:
-        """Predict the next state in raw SI units.
-
-        Args:
-            state:  (..., 2) [angle, velocity]
-            action: (..., 1) applied hinge torque
-            z:      (..., embed_dim) latent mechanics vector -- from the table
-                    during stage 1, from an online optimiser during stage 2. The
-                    model does not care which.
-        Returns:
-            (..., 2) predicted next state.
-        """
+        """Next state in raw SI units, from (..., 2) state, (..., 1) torque and
+        (..., embed_dim) latent."""
         out_n = self.raw_output(state, action, z)
         if self.predict_delta:
             state_b = torch.broadcast_to(state, out_n.shape)
@@ -199,8 +159,7 @@ class MechanicsDynamicsModel(nn.Module):
 
     # -- stage-2 helpers --------------------------------------------------
     def freeze(self) -> "MechanicsDynamicsModel":
-        """Freeze every network weight. Stage 2 calls this and then optimises a
-        standalone ``z`` tensor with ``requires_grad=True``."""
+        """Freeze every network weight, leaving only a standalone ``z`` optimisable."""
         for p in self.parameters():
             p.requires_grad_(False)
         self.eval()
@@ -211,16 +170,9 @@ class MechanicsDynamicsModel(nn.Module):
     ) -> nn.Parameter:
         """Create a fresh optimisable ``z`` for unseen doors.
 
-        Defaults to zeros, but **zeros is a poor starting point** and stage 2
-        should pass ``init`` explicitly. Measured on the shipped checkpoint: the
-        trained latents all have norm >= 1.8 while their centroid sits at the
-        origin, so ``z = 0`` falls in a hole that contains no training door and
-        the network has never been evaluated there. On unseen doors it predicts
-        ~8x worse than a trained door, while simply borrowing an arbitrary
-        *real* door's latent is only ~2.3x worse.
-
-        Prefer initialising from the training table -- its medoid, or the row of
-        whichever door best explains the first few transitions.
+        Pass ``init`` explicitly. Zeros is a hole in the trained latent cloud
+        (rows have norm >= 1.8) and predicts ~8x worse than any real latent;
+        prefer the training table's medoid.
         """
         device = device or self.state_mean.device
         if init is None:
@@ -234,11 +186,7 @@ class MechanicsDynamicsModel(nn.Module):
 def _match_batch(
     state: torch.Tensor, action: torch.Tensor, z: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Broadcast a single shared ``z`` across a batch of states.
-
-    Lets callers write ``model(states, actions, z)`` with one latent for a whole
-    trajectory -- the common case in rollouts and in stage-2 adaptation.
-    """
+    """Broadcast a single shared ``z`` across a batch of states."""
     if z.dim() == 1:
         z = z.unsqueeze(0)
     if z.shape[0] == 1 and state.shape[0] != 1:
@@ -251,13 +199,8 @@ def _match_batch(
 class DoorEmbeddingTable(nn.Module):
     """Learnable ``door_id -> z`` lookup, used only while training on known doors.
 
-    Initialised small and near zero so that every door starts from the same
-    prior and the region of latent space the network trains on stays compact.
-
-    Note that training does *not* leave the origin meaningful: the rows spread
-    out onto a shell (norm >= 1.8 on the shipped checkpoint) whose centroid
-    contains no door. See ``MechanicsDynamicsModel.new_latent`` -- stage 2 should
-    initialise from this table, not from zeros.
+    Initialised near zero, but training spreads the rows onto a shell whose
+    centroid contains no door -- see ``MechanicsDynamicsModel.new_latent``.
     """
 
     def __init__(self, num_doors: int, embed_dim: int, init_std: float = 0.1) -> None:
@@ -278,10 +221,6 @@ class DoorEmbeddingTable(nn.Module):
         return self.table.weight.detach().cpu().numpy()
 
 
-# ---------------------------------------------------------------------------
-# Checkpoints
-# ---------------------------------------------------------------------------
-
 def save_checkpoint(
     path: str | Path,
     model: MechanicsDynamicsModel,
@@ -289,11 +228,7 @@ def save_checkpoint(
     cfg: ExperimentConfig,
     extra: dict[str, Any] | None = None,
 ) -> Path:
-    """Write a self-contained checkpoint.
-
-    The dynamics model and the embedding table are stored under separate keys on
-    purpose: stage-2 code loads the model and ignores the table entirely.
-    """
+    """Write a self-contained checkpoint; model and table live under separate keys."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -327,17 +262,10 @@ def load_checkpoint(
     stage: str = "unlabelled",
     expected_sha256: str | None = None,
 ) -> tuple[MechanicsDynamicsModel, DoorEmbeddingTable | None, ExperimentConfig, dict]:
-    """Load a checkpoint.
+    """Load a checkpoint and record its sha256 via ``provenance.log_checkpoint``.
 
-    Stage-2 usage is ``load_checkpoint(p, with_embeddings=False)`` followed by
-    ``model.freeze()`` -- the table is training scaffolding, not part of the
-    method.
-
-    Every load records the file's sha256 via ``provenance.log_checkpoint``, so
-    which frozen predictor produced a result is visible in that result's own log
-    rather than something to be reconstructed afterwards. ``stage`` names the
-    caller; ``expected_sha256`` (a full hash or a leading prefix) turns a silent
-    substitution into a hard failure.
+    ``stage`` names the caller; ``expected_sha256`` (full hash or prefix) turns a
+    silent substitution into a hard failure.
     """
     payload = torch.load(path, map_location=device, weights_only=False)
     model = MechanicsDynamicsModel(**payload["model_kwargs"])

@@ -1,20 +1,9 @@
-"""
-Step 1: extract every learned latent into a reusable analysis dataset.
+"""Extract every learned latent into a reusable analysis dataset.
 
-No model weights are modified anywhere in this package. Checkpoints are opened
-read-only, embedding tables are copied out, and each row is joined against the
-mechanism metadata stored alongside the dataset it was trained on.
-
-One gap had to be filled first. Stages 1-5 left seventeen checkpoints, but none
-of them contains all six mechanism families at once: Stage 4's largest tables
-hold 100 instances of five families (each ``exp3_no_*`` variant withholds one),
-and Stage 5's hold 48 across six but only eight per family. A multimodality test
-wants the widest table available, so ``build_all_families_checkpoint`` trains one
-additional model on all six families using the *unchanged* Stage-1 pipeline and
-Stage-4's cached rollouts. That is a new run of existing code, not a change to it.
-
-The resulting dataset is saved as an ``.npz`` so every later step -- geometry,
-mixture fitting, interpolation, Jacobians -- reads the same fixed table.
+Checkpoints are opened read-only and each embedding row is joined to its
+mechanism metadata. No earlier checkpoint holds all six families at once, so
+``build_all_families_checkpoint`` trains one more with the unchanged Stage-1
+pipeline. The result is saved as an ``.npz`` that every later step reads.
 """
 
 from __future__ import annotations
@@ -39,11 +28,11 @@ STAGE5_EVAL = Path("runs/latent_mechanics/curriculum/eval_suite.pkl")
 class LatentDataset:
     """Every latent from one checkpoint, joined to its object metadata."""
 
-    z: np.ndarray                # (N, d) the embeddings themselves
+    z: np.ndarray                # (N, d)
     family: np.ndarray           # (N,) mechanism category
     instance_id: np.ndarray      # (N,) row index = object instance
-    split: np.ndarray            # (N,) "train" for every table row, by construction
-    params: np.ndarray           # (N, P) true physical parameters (analysis only)
+    split: np.ndarray            # (N,) "train" for every table row
+    params: np.ndarray           # (N, P) true parameters, analysis only
     param_names: list[str]
     checkpoint: str
     npz_path: str
@@ -109,12 +98,11 @@ def extract_from_checkpoint(ckpt: str | Path, data_npz: str | Path) -> LatentDat
 def build_all_families_checkpoint(
     out_dir: Path, epochs: int = 40, force: bool = False
 ) -> tuple[Path, Path]:
-    """Train one model on all six families. Uses the Stage-1 pipeline unchanged.
+    """Train one model on all six families with the Stage-1 pipeline unchanged.
 
-    Training instances come from Stage 4's cached rollouts (20 per family) and
-    the held-out set is Stage 5's fixed evaluation suite (10 per family, a
-    disjoint seed), so later steps have genuinely unseen objects to interpolate
-    toward and to attribute error on.
+    Training instances come from Stage 4's cached rollouts; the held-out set is
+    Stage 5's evaluation suite, on a disjoint seed, so later steps have genuinely
+    unseen objects.
     """
     ckpt = out_dir / "runs" / "all_families" / "best.pt"
     npz = out_dir / "data_all_families.npz"

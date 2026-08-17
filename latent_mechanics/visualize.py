@@ -1,17 +1,8 @@
-"""
-Figures for the stage-1 model.
+"""Figures for the stage-1 model: rollout overlays, horizon error curves, per-door
+error, and the latent space.
 
-Four views, each answering a specific question:
-
-  rollout overlays       does the model track a real trajectory open-loop?
-  horizon error curves   how fast does error grow with prediction horizon?
-  per-door error         is accuracy uniform, or carried by a few easy doors?
-  latent space           did the embeddings organise by physical mechanics?
-
-The latent-space plot is the one that speaks to the research claim. If latents
-line up with true inertia / friction / damping without ever having been shown
-them, the embedding really is encoding mechanics -- which is the premise stage-2
-online adaptation rests on.
+The latent-space plot carries the research claim -- if the embeddings line up
+with true inertia/friction/damping they were never shown, they encode mechanics.
 """
 
 from __future__ import annotations
@@ -112,11 +103,8 @@ def plot_per_door_error(
     path: Path,
     metric: str = "rmse_angle",
 ) -> Path:
-    """One-step error per door, and the same error against each true parameter.
-
-    A strong trend against a parameter means that regime is systematically
-    harder -- useful for knowing where stage-2 adaptation will struggle.
-    """
+    """One-step error per door, and against each true parameter. A strong trend
+    means that regime is systematically harder."""
     ids = sorted(per_door)
     vals = np.array([per_door[i][metric] for i in ids])
     params = np.array([[dataset.params_for_door(i)[c] for c in
@@ -150,7 +138,6 @@ def plot_latent_space(
     true physical parameters the model was never given."""
     ids = np.arange(len(latents))
     z = latents - latents.mean(0, keepdims=True)
-    # SVD rather than a PCA dependency; components are the right singular vectors.
     u, s, _ = np.linalg.svd(z, full_matrices=False)
     pcs = u[:, :2] * s[:2]
     explained = s**2 / max(float((s**2).sum()), 1e-12)

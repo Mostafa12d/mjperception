@@ -1,26 +1,9 @@
-"""
-Does the chosen adaptive-R window survive time-varying dynamics?
+"""Does the chosen adaptive-R window survive time-varying dynamics?
 
-The d/window sweep in ``sweep.py`` ran entirely on *stationary* objects. Stage 3
-built a ``ParameterDrift`` perturbation, but it was never carried into the
-Stage-4 mechanism families -- ``perturbations_for`` attaches Stribeck,
-position-dependent friction and soft-close damping, all time-invariant -- so no
-object in that sweep had mechanics that changed during the episode.
-
-That is exactly the gap that matters for the window choice. A long innovation
-window estimates R from further into the past, and under drift the past is a
-worse description of the present. Combined with a small fixed Q, the failure
-mode is a filter that becomes confident about mechanics that have since moved on
-and then refuses to update. A stationary benchmark cannot see this.
-
-This script re-rolls held-out objects with ``ParameterDrift`` layered on top of
-their own family physics and compares windows 20 / 50 / 100 against the
-gradient-descent module and the no-adaptation control.
-
-Nothing here is a "ceiling" comparison: under drift there is no single best
-latent, so the oracle ceilings from the geometry report do not apply. Errors are
-reported directly, and relative to the no-adaptation control at the *same* drift
-level, which is the only fair reference.
+``sweep.py`` runs only on stationary objects. This re-rolls held-out objects with
+``ParameterDrift`` on top of their family physics and compares R windows against
+gradient descent and the no-adaptation control. Under drift no single best latent
+exists, so errors are scored against that control, not the oracle ceiling.
 
     python3.10 -m latent_mechanics.belief.drift_check
 """
@@ -48,8 +31,7 @@ from latent_mechanics.online.config import load_config as load_online_config
 from latent_mechanics.online.loop import init_strategies, run_online_adaptation
 
 EVAL_SUITE = Path("runs/latent_mechanics/curriculum/eval_suite.pkl")
-# Stage-3 severity levels for friction drift, in units of 1/s.
-DRIFT_RATES = (0.0, 0.15, 0.40)
+DRIFT_RATES = (0.0, 0.15, 0.40)   # Stage-3 friction-drift severity levels, 1/s
 
 
 def roll_with_drift(params, cfg, drift_rate: float, n_episodes: int,
@@ -67,8 +49,7 @@ def roll_with_drift(params, cfg, drift_rate: float, n_episodes: int,
         log = simulate_mechanism(profile.as_fn(), model, n_steps, perts)
         _, _, jid = lib.joint_info(model)
         lo, hi = float(model.jnt_range[jid][0]), float(model.jnt_range[jid][1])
-        # This object's own joint range, not the door's -- see
-        # data_gen.transitions_from_log.
+        # this object's own joint range, not the door's
         tr = transitions_from_log(log.as_stage1_dict(), frame_skip,
                                   joint_range=(lo, hi),
                                   limit_margin=limit_margin_for(lo, hi))
@@ -111,7 +92,7 @@ def main() -> None:
 
     with open(EVAL_SUITE, "rb") as f:
         suite = pickle.load(f)
-    # Spread the sample across families rather than taking the first N.
+    # spread the sample across families rather than taking the first N
     by_fam: dict[str, list] = {}
     for p in suite:
         by_fam.setdefault(p.params.family, []).append(p.params)
@@ -149,12 +130,11 @@ def main() -> None:
                 else:
                     ad = UKFLatentAdaptor(
                         model, basis,
-                        UKFConfig(dim=args.dim, noise_kind="adaptive", window=w),
+                        UKFConfig(dim=args.dim, noise_kind="residual", window=w),
                         init=init, prior_latents=train_z)
                 log = run_online_adaptation(ad, stream, door_id=params.mechanism_id,
                                             verify_frozen=False)
-                # Late-vs-mid error is the tracking signal: under drift a filter
-                # that has stopped listening gets worse as the episode proceeds.
+                # late-vs-mid error: a filter that stopped listening degrades
                 mid = slice(len(stream) // 2 - tail // 2, len(stream) // 2 + tail // 2)
                 rows.append({
                     "drift_rate": rate, "family": params.family,

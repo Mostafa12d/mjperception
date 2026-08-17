@@ -1,19 +1,9 @@
-"""
-Self-checks for the Stage-5 curriculum study.
+"""Self-checks for the Stage-5 curriculum study.
 
-Two properties carry the whole stage, and both are asserted here rather than
-assumed:
+Two properties carry the stage and are asserted rather than assumed: the training
+budget is fixed, so the diversity axis is not a data-quantity axis; and the
+evaluation suite never changes, so the scaling curves compare models on one test.
 
-  *the training budget is fixed* -- every level trains on the same number of
-   instances, so movement along the diversity axis cannot be confused with
-   movement along a data-quantity axis. This is the difference between a
-   diversity result and a scaling-law truism.
-
-  *the evaluation suite never changes* -- the same unseen instances, in the same
-   order, are the held-out split of every level's dataset. If this drifted, the
-   scaling curves would be comparing models on different tests.
-
-Run:
     python3.10 -m latent_mechanics.curriculum.tests
 """
 
@@ -53,8 +43,6 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     if not cond:
         _FAILURES.append(name)
 
-
-# ---------------------------------------------------------------------------
 
 def test_budget_is_fixed() -> None:
     print("\nTraining budget is identical at every level")
@@ -105,7 +93,6 @@ def test_eval_suite_is_fixed_and_unseen() -> None:
     check("eval seed is far from the training seed",
           abs(cc.eval_seed - cc.train_seed) > 100)
 
-    # Same seed -> byte-identical suite, which is what "never changes" means.
     cfg = load_stage1_config("configs/latent_mechanics.yaml")
     a = lib.sample_params("door", np.random.default_rng(cc.eval_seed), 10_000)
     b = lib.sample_params("door", np.random.default_rng(cc.eval_seed), 10_000)
@@ -190,18 +177,15 @@ def test_frozen_components() -> None:
     ad.assert_network_unchanged()
     check("Stage-2 adaptor still refuses to touch network weights", True)
 
-    # Adding door_narrow must not have perturbed any pre-existing family.
+    # adding door_narrow must not have perturbed a pre-existing family
     d = lib.FAMILIES["door"]
     check("the 'door' family spec is unchanged",
           d.friction_range == (0.5, 6.0) and d.damping_range == (0.02, 1.5)
           and d.stiffness_range == (0.0, 8.0), str(d))
 
 
-# ---------------------------------------------------------------------------
-
-# Drawn in a fresh interpreter so the parent's hash salt cannot leak in. Prints
-# the per-family seeds and the first sampled parameter vector per family, which
-# together pin down the whole population draw without simulating anything.
+# Run in a fresh interpreter so the parent's hash salt cannot leak in. The seeds
+# and first sampled parameters pin down the draw without simulating anything.
 _DRAW_SNIPPET = """
 import json, sys
 sys.path.insert(0, %(root)r)
@@ -233,13 +217,8 @@ def _draw_in_subprocess(hashseed: str) -> dict:
 
 
 def test_population_draw_is_reproducible_across_processes() -> None:
-    """A1: the population must follow from the seed, not from the hash salt.
-
-    Two fresh interpreters with deliberately different ``PYTHONHASHSEED`` values
-    must draw the identical population. Under the old
-    ``base_seed + abs(hash(fam)) % 10_000`` this fails, because ``hash`` on a
-    ``str`` is salted per process.
-    """
+    """The population must follow from the seed, not the hash salt: two
+    interpreters with different ``PYTHONHASHSEED`` must draw the same one."""
     print("\nPopulation draw is reproducible from the seed alone (fresh processes)")
     try:
         a = _draw_in_subprocess("1")

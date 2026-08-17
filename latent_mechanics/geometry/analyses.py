@@ -1,16 +1,9 @@
-"""
-Steps 2-6: what shape is the learned latent mechanics space?
+"""What shape is the learned latent mechanics space? All read-only w.r.t. weights.
 
-Every routine here is read-only with respect to model weights.
-
-The methodological spine of this module is the **matched null baseline**. Any
-clustering procedure returns clusters. BIC will select K > 1 on perfectly
-unimodal Gaussian data whenever the sample is small and the dimension is large,
-which is exactly the regime here: 120 points in 16 dimensions, where a single
-full-covariance component already costs 152 parameters. So every multimodality
-statistic is computed twice -- once on the real latents, and once on synthetic
-data drawn from a single Gaussian matched to the real data's mean, covariance,
-sample size and dimension. Only the *difference* is evidence.
+The spine of this module is the matched null baseline: any clustering procedure
+returns clusters, and BIC selects K > 1 on unimodal Gaussian data at 120 points
+in 16 dimensions. Every multimodality statistic is therefore computed twice, on
+the real latents and on a matched unimodal Gaussian. Only the difference counts.
 """
 
 from __future__ import annotations
@@ -30,10 +23,6 @@ from sklearn.mixture import GaussianMixture
 
 from latent_mechanics.model import MechanicsDynamicsModel
 
-
-# ---------------------------------------------------------------------------
-# Step 2: geometry
-# ---------------------------------------------------------------------------
 
 def project(z: np.ndarray, method: str, seed: int = 0) -> tuple[np.ndarray, str]:
     """2-D projection by PCA, UMAP or t-SNE."""
@@ -71,10 +60,6 @@ def spectrum(z: np.ndarray) -> dict:
     }
 
 
-# ---------------------------------------------------------------------------
-# Step 3: multimodality
-# ---------------------------------------------------------------------------
-
 @dataclass
 class GMMResult:
     k: int
@@ -92,13 +77,8 @@ def gmm_sweep(
     z: np.ndarray, k_max: int = 15, covariance_type: str = "full",
     n_folds: int = 5, seed: int = 0,
 ) -> list[GMMResult]:
-    """Fit K = 1..k_max and report selection criteria plus held-out likelihood.
-
-    Held-out log likelihood is the honest criterion here: BIC and AIC both
-    penalise parameters with a formula that assumes the sample is large relative
-    to the parameter count, which is not true at 120 points in 16 dimensions.
-    Cross-validated likelihood makes no such assumption.
-    """
+    """Fit K = 1..k_max with selection criteria plus held-out likelihood, which is
+    the honest criterion at this sample size (BIC/AIC assume N >> n_params)."""
     rng = np.random.default_rng(seed)
     n = len(z)
     folds = np.array_split(rng.permutation(n), n_folds)
@@ -163,10 +143,8 @@ def cluster_indices(z: np.ndarray, k_max: int = 15, seed: int = 0) -> dict:
 
 
 def matched_null(z: np.ndarray, n_reps: int = 20, seed: int = 0) -> list[np.ndarray]:
-    """Unimodal Gaussians matched to the real data's mean, covariance, N and d.
-
-    This is the control every multimodality statistic is compared against.
-    """
+    """Unimodal Gaussians matched to the real data's mean, covariance, N and d --
+    the control every multimodality statistic is compared against."""
     rng = np.random.default_rng(seed)
     mu = z.mean(0)
     cov = np.cov(z, rowvar=False) + 1e-8 * np.eye(z.shape[1])
@@ -200,7 +178,7 @@ def multimodality_evidence(
     best_ll = max(finite, key=lambda r: r.heldout_ll) if finite else None
     real_best_sil = max(real_idx["silhouette"]) if real_idx["silhouette"] else float("nan")
 
-    # One-sided empirical p-value: how often does the null reach this silhouette?
+    # one-sided empirical p-value: how often the null reaches this silhouette
     p_sil = (float(np.mean(np.array(null_sil) >= real_best_sil))
              if null_sil else float("nan"))
 
@@ -220,12 +198,8 @@ def multimodality_evidence(
 
 
 def residualise(z: np.ndarray, covariates: Sequence[np.ndarray]) -> np.ndarray:
-    """Remove the linear part of ``z`` explained by ``covariates``.
-
-    OLS of ``z`` on ``[1, *covariates]``, returning the residual. Used to ask
-    whether the latent's apparent cluster structure is anything more than one
-    scalar -- mechanical scale -- re-expressed.
-    """
+    """Residual of ``z`` after OLS on ``[1, *covariates]``. Used to ask whether the
+    apparent cluster structure is just mechanical scale re-expressed."""
     X = np.column_stack([np.ones(len(z))] + [np.asarray(c, float) for c in covariates])
     beta, *_ = np.linalg.lstsq(X, z, rcond=None)
     return z - X @ beta
@@ -247,10 +221,8 @@ def best_silhouette(z: np.ndarray, k_max: int = 15, seed: int = 0) -> tuple[floa
 def nn_family_purity(z: np.ndarray, family: np.ndarray) -> dict:
     """Fraction of objects whose nearest latent neighbour is the same family.
 
-    A *local* statistic, deliberately alongside silhouette rather than instead of
-    it. Silhouette asks whether the cloud separates globally; this asks whether a
-    latent's immediate neighbourhood is mechanically like it. The two can and do
-    disagree, and the disagreement is the interesting part.
+    A local statistic, reported alongside silhouette (which is global). Where the
+    two disagree is the interesting part.
     """
     from sklearn.neighbors import NearestNeighbors
 
@@ -267,11 +239,8 @@ def nn_family_purity(z: np.ndarray, family: np.ndarray) -> dict:
 def excess_silhouette(
     z: np.ndarray, k_max: int = 15, n_null: int = 20, seed: int = 0
 ) -> dict:
-    """Best silhouette minus the matched unimodal null's, plus a p-value.
-
-    The null is searched over the *same* K range as the real data, so the two
-    maxima are taken over the same number of candidates.
-    """
+    """Best silhouette minus the matched null's, plus a p-value. The null is
+    searched over the same K range, so both maxima have equally many candidates."""
     real, real_k = best_silhouette(z, k_max, seed)
     nulls = [best_silhouette(nz, k_max, seed)[0]
              for nz in matched_null(z, n_null, seed)]
@@ -295,14 +264,10 @@ def scale_dominance(
 ) -> dict:
     """How much of the latent's cluster structure is just mechanical scale?
 
-    Computes the geometry, excess-silhouette, family-agreement and purity
-    statistics on the raw latent and on scale-residualised versions of it. If the
-    excess silhouette collapses toward the matched null once a single scalar is
-    regressed out, the apparent discrete structure was that scalar.
-
-    ``data_scale`` optionally adds per-object *observed* scale covariates (e.g.
-    log RMS step size and log RMS action), which are what a filter actually sees,
-    as distinct from the ground-truth inertia it does not.
+    Runs the same statistics on the raw latent and on scale-residualised versions.
+    If the excess silhouette collapses once a scalar is regressed out, the
+    apparent discrete structure was that scalar. ``data_scale`` adds observed
+    covariates (what a filter sees) as distinct from ground-truth inertia.
     """
     variants: dict[str, np.ndarray] = {
         "raw": z,
@@ -328,7 +293,7 @@ def scale_dominance(
             "purity": pur,
         }
 
-    # Which latent directions ARE the scale axis?
+    # which latent directions ARE the scale axis
     zc = z - z.mean(0)
     u, s, _ = np.linalg.svd(zc, full_matrices=False)
     pcs = u * s
@@ -346,11 +311,7 @@ def scale_dominance(
 
 
 def family_agreement(z: np.ndarray, family: np.ndarray, k: int, seed: int = 0) -> dict:
-    """Do unsupervised clusters recover the known mechanism families?
-
-    If the latent really is a discrete mixture over mechanism types, clusters
-    found without labels should line up with the labels.
-    """
+    """Do unsupervised clusters recover the known mechanism families?"""
     from sklearn.metrics import adjusted_mutual_info_score, adjusted_rand_score
     lab = KMeans(k, n_init=10, random_state=seed).fit_predict(z)
     return {
@@ -359,10 +320,6 @@ def family_agreement(z: np.ndarray, family: np.ndarray, k: int, seed: int = 0) -
         "adjusted_mutual_info": float(adjusted_mutual_info_score(family, lab)),
     }
 
-
-# ---------------------------------------------------------------------------
-# Step 4: continuity
-# ---------------------------------------------------------------------------
 
 @torch.no_grad()
 def _err_on(model, z: np.ndarray, s, a, ns) -> float:
@@ -377,12 +334,8 @@ def interpolation_profile(
     model: MechanicsDynamicsModel, z_a: np.ndarray, z_b: np.ndarray,
     data_a: tuple, data_b: tuple, n_steps: int = 21,
 ) -> dict:
-    """Walk z from object A to object B, scoring on both objects' data.
-
-    In a smooth space the two error curves cross over monotonically. A *barrier*
-    -- both objects predicted worse at some interior point than at either end --
-    is the signature of separated modes with nothing valid in between.
-    """
+    """Walk z from object A to B, scoring on both objects' data. In a smooth space
+    the curves cross monotonically; a barrier means separated modes."""
     alphas = np.linspace(0, 1, n_steps)
     ea, eb = [], []
     for al in alphas:
@@ -390,8 +343,7 @@ def interpolation_profile(
         ea.append(_err_on(model, z, *data_a))
         eb.append(_err_on(model, z, *data_b))
     ea, eb = np.array(ea), np.array(eb)
-    # Barrier: the best either object can do at an interior point, relative to
-    # the better of the two endpoints.
+    # barrier: best interior error relative to the better endpoint
     interior = np.minimum(ea, eb)[1:-1]
     endpoint = min(ea[0], eb[-1])
     return {
@@ -402,21 +354,12 @@ def interpolation_profile(
     }
 
 
-# ---------------------------------------------------------------------------
-# Step 5: local linearity
-# ---------------------------------------------------------------------------
-
 def jacobian_stats(
     model: MechanicsDynamicsModel, z_samples: np.ndarray, states: np.ndarray,
     actions: np.ndarray, n_points: int = 400, seed: int = 0,
 ) -> dict:
-    """Distribution of df/dz over operating points, and how fast it varies.
-
-    An EKF/IMM linearises f about the current z. That is reasonable exactly when
-    the Jacobian is well conditioned and roughly constant over the region the
-    belief occupies; it breaks when the Jacobian swings by orders of magnitude
-    over a typical update step.
-    """
+    """Distribution of df/dz over operating points, and how fast it varies. An EKF
+    is only reasonable while this is well conditioned and roughly constant."""
     rng = np.random.default_rng(seed)
     idx = rng.integers(0, len(states), size=n_points)
     zid = rng.integers(0, len(z_samples), size=n_points)
@@ -440,7 +383,7 @@ def jacobian_stats(
         conds.append(float(sv[0] / max(sv[-1], 1e-30)))
 
     jacs = np.stack(jacs)
-    # How much does J change between two operating points, relative to its size?
+    # how much J changes between operating points, relative to its size
     m = jacs.mean(0)
     rel_var = float(np.mean(np.linalg.norm(jacs - m, axis=(1, 2))) /
                     max(np.linalg.norm(m), 1e-30))
@@ -461,19 +404,13 @@ def linearization_error(
     actions: np.ndarray, step_sizes: tuple[float, ...] = (0.05, 0.1, 0.25, 0.5, 1.0),
     n_points: int = 200, n_dirs: int = 8, seed: int = 0,
 ) -> dict:
-    """First-order prediction error as a function of how far z moves.
-
-    ``f(z0 + d) ~= f(z0) + J d``. The reported number is the relative error of
-    that approximation, so 0.1 means the linear model explains 90% of the true
-    change. This is the quantity an EKF's accuracy hinges on.
-    """
+    """Relative error of ``f(z0 + d) ~= f(z0) + J d`` as a function of |d|, so 0.1
+    means the linear model explains 90% of the true change."""
     rng = np.random.default_rng(seed)
     idx = rng.integers(0, len(states), size=n_points)
     s = torch.as_tensor(states[idx], dtype=torch.float32)
     a = torch.as_tensor(actions[idx], dtype=torch.float32)
-    # PER-SAMPLE Jacobians. Taking grad of a summed output and reusing it for
-    # every sample silently multiplies J by the batch size, which inflates the
-    # linearisation error by the same factor; vmap+jacrev keeps them separate.
+    # per-sample Jacobians: a grad of the summed output would scale J by the batch
     z0_t = torch.as_tensor(z0, dtype=torch.float32).reshape(-1)
 
     def _f_one(zv, s_one, a_one):
@@ -511,26 +448,52 @@ def linearization_error(
     return out
 
 
-# ---------------------------------------------------------------------------
-# Step 6: where does the error come from?
-# ---------------------------------------------------------------------------
-
 def fit_oracle_latent(
     model: MechanicsDynamicsModel, s, a, ns, z_init: np.ndarray,
-    steps: int = 400, lr: float = 0.05,
+    steps: int = 1500, lr: float = 0.05,
+    extra_inits: "list[np.ndarray] | None" = None,
+    objective: str = "normalised_delta",
 ) -> np.ndarray:
     """Best latent for this object, fitted offline on all of its data.
 
-    Defines the ceiling: whatever error remains at this z cannot be removed by
-    any online belief update, however clever, because no z does better.
+    The ceiling every online method is measured against, so convergence matters:
+    cosine-decayed lr, best-iterate tracking (undecayed Adam wanders and can
+    return a worse z than it started from), and optional restarts via
+    ``extra_inits`` -- passing the estimate under test makes the result a strictly
+    tighter upper bound on it.
+
+    ``objective`` must match whatever the caller then scores, or the ceiling is a
+    ceiling on a different quantity and methods can legitimately dip below it:
+    ``normalised_delta`` is the network's own training loss, ``angle`` is the
+    angle-channel error that this project's tables quote.
     """
-    z = torch.nn.Parameter(torch.as_tensor(z_init, dtype=torch.float32).reshape(1, -1).clone())
-    opt = torch.optim.Adam([z], lr=lr)
-    for _ in range(steps):
-        loss = torch.nn.functional.mse_loss(model.raw_output(s, a, z),
-                                            model.target(s, ns))
-        opt.zero_grad(); loss.backward(); opt.step()
-    return z.detach().numpy().reshape(-1)
+    if objective not in ("normalised_delta", "angle"):
+        raise ValueError(f"unknown objective {objective!r}")
+    target = model.target(s, ns).detach()
+    best_z, best_loss = None, float("inf")
+
+    def compute_loss(z):
+        if objective == "angle":
+            return torch.nn.functional.mse_loss(model(s, a, z)[:, 0], ns[:, 0])
+        return torch.nn.functional.mse_loss(model.raw_output(s, a, z), target)
+
+    for z0 in [z_init, *(extra_inits or [])]:
+        z = torch.nn.Parameter(
+            torch.as_tensor(z0, dtype=torch.float32).reshape(1, -1).clone())
+        opt = torch.optim.Adam([z], lr=lr)
+        sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max(steps, 1))
+        for _ in range(steps):
+            loss = compute_loss(z)
+            # record the iterate that produced this loss, before stepping away
+            if loss.item() < best_loss:
+                best_loss, best_z = loss.item(), z.detach().clone()
+            opt.zero_grad(); loss.backward(); opt.step(); sched.step()
+        with torch.no_grad():
+            final = compute_loss(z).item()
+        if final < best_loss:
+            best_loss, best_z = final, z.detach().clone()
+
+    return best_z.numpy().reshape(-1)
 
 
 __all__ = [

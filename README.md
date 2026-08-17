@@ -9,8 +9,34 @@ Two approaches are developed side by side and benchmarked against each other:
 classical recursive least squares on a linear-in-parameters model, and a learned
 dynamics network carrying a per-object latent "mechanics vector".
 
+- **[ARCHITECTURE.md](ARCHITECTURE.md)** — the experimental core, the code map, and
+  how to swap the predictor / observation model / representation / estimator.
+  **Start here.**
+- **[CURRENT_SYSTEM.md](CURRENT_SYSTEM.md)** — audit: research goal, actual data
+  flow, architectural problems, what is demonstrated vs still hypothesis.
+- **[REFACTOR_PROPOSAL.md](REFACTOR_PROPOSAL.md)** — the proposed architecture and
+  migration plan.
 - **[docs/RUNNING.md](docs/RUNNING.md)** — how to set up and run everything.
 - **[docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)** — what each stage established.
+
+## The research loop
+
+```python
+belief = estimator.initialize()
+
+for transition in transitions:
+    prediction     = predictor.predict(transition.obs, transition.action, belief)
+    belief, record = estimator.update(belief, transition)
+```
+
+That is `mechanics/loop.py`. Four things are swappable independently — predictor,
+observation model, mechanics representation, estimator — without touching the rest
+of the experiment.
+
+```bash
+python3.10 -m experiments.sanity_one_door.run      # smallest end-to-end run
+python3.10 -m mechanics.tests                      # unit + bit-equivalence checks
+```
 
 ---
 
@@ -18,6 +44,8 @@ dynamics network carrying a per-object latent "mechanics vector".
 
 | directory | line of work |
 |---|---|
+| [mechanics/](mechanics/) | **the experimental core** — the loop and the four swappable interfaces. Wraps the algorithms in `latent_mechanics/` rather than replacing them. |
+| [experiments/](experiments/) | one directory per research question; each holds an `ExperimentSpec` stating plant, observation model, predictor, representation, estimator, disturbances and metrics. |
 | [baseline/](baseline/) | **A** — RLS system identification + adaptive impedance on the bare door. `run_door_dynamics_validation.py` is the spine: its `simulate()` log dict is the data contract every other estimator consumes. |
 | [iiwa/](iiwa/) | **B** — the same loop driven through a KUKA iiwa 14, with proprioceptive FK and a simulated wrist F/T sensor instead of oracle state. |
 | [latent_mechanics/](latent_mechanics/) | **C** — the learned alternative. Five evaluation stages plus `geometry/` and `belief/`; each subpackage has its own README with results and limitations. |

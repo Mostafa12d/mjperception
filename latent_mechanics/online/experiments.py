@@ -1,18 +1,11 @@
-"""
-Stage-2 experiments.
+"""Stage-2 experiments, all sharing one driver and protocol (see ``loop.py``):
 
   1. Prediction error vs interaction number on an unseen door.
   2. Latent initialisation: zero / random trained / mean / medoid.
   3. Latent adaptation vs the RLS baseline on identical doors and streams.
 
-Plus the latent-trajectory visualisation for the focus door.
-
-All three share one driver and one protocol (predict-then-update, see
-``loop.py``), so the numbers are directly comparable.
-
-Run:
     python3.10 -m latent_mechanics.online.experiments --config configs/online_adaptation.yaml
-    python3.10 -m latent_mechanics.online.experiments --only 3        # one experiment
+    python3.10 -m latent_mechanics.online.experiments --only 3
 """
 
 from __future__ import annotations
@@ -42,10 +35,6 @@ from latent_mechanics.online.loop import (
 )
 from latent_mechanics.online.rls_adaptor import RLSAdaptor
 
-
-# ---------------------------------------------------------------------------
-# Shared setup
-# ---------------------------------------------------------------------------
 
 class Context:
     """Everything the experiments share: the frozen model, data, references."""
@@ -123,10 +112,6 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
     print(f"  table  -> {path}")
 
 
-# ---------------------------------------------------------------------------
-# Experiment 1
-# ---------------------------------------------------------------------------
-
 def experiment_1(ctx: Context) -> dict:
     print("\n" + "=" * 74)
     print("EXPERIMENT 1  prediction error vs interaction number")
@@ -136,10 +121,8 @@ def experiment_1(ctx: Context) -> dict:
     window = ctx.cfg.experiments.rolling_window
     print(f"  latent initialised from: {init_name}")
 
-    # The control: identical latent, updates disabled. Its error is what the
-    # robot would suffer for the whole episode without adapting, and it is the
-    # only honest "before" number -- the adapted run's own early steps have
-    # already started learning, so they understate the starting error.
+    # the control: identical latent, updates disabled. The only honest "before"
+    # number, since the adapted run's early steps have already started learning.
     rows, logs, static_logs = [], [], []
     for did in ctx.door_ids:
         tr, bounds = ctx.stream(did)
@@ -183,10 +166,6 @@ def experiment_1(ctx: Context) -> dict:
         lg.init_name = f"door {lg.door_id}"
     return {"per_door": rows, "median_improvement_x": med, "logs": logs}
 
-
-# ---------------------------------------------------------------------------
-# Experiment 2
-# ---------------------------------------------------------------------------
 
 def experiment_2(ctx: Context) -> dict:
     print("\n" + "=" * 74)
@@ -246,10 +225,6 @@ def experiment_2(ctx: Context) -> dict:
     return {"rows": rows, "summary": summary}
 
 
-# ---------------------------------------------------------------------------
-# Experiment 3
-# ---------------------------------------------------------------------------
-
 def experiment_3(ctx: Context) -> dict:
     print("\n" + "=" * 74)
     print("EXPERIMENT 3  latent adaptation vs RLS (identical doors and streams)")
@@ -277,12 +252,8 @@ def experiment_3(ctx: Context) -> dict:
         per_door_logs[did] = logs
 
         for lg in logs:
-            # Two convergence measures, because they answer different questions.
-            # "own": steps to reach 1.5x this method's OWN final error -- pure
-            # speed, independent of how accurate the method ends up.
-            # "shared": steps to reach 1.5x the BEST final error any method
-            # achieves on this door -- speed to a common accuracy bar, which a
-            # less accurate method may never clear.
+            # "own" = speed to 1.5x this method's own final error; "shared" =
+            # speed to 1.5x the best any method reaches, a bar some never clear
             own = lg.steps_to(1.5 * lg.final_rmse(0), 0, window)
             shared_thresh = 1.5 * min(x.final_rmse(0) for x in logs)
             shared = lg.steps_to(shared_thresh, 0, window)
@@ -329,10 +300,6 @@ def experiment_3(ctx: Context) -> dict:
                                window, ctx.reference["angle"])
     return {"rows": rows, "summary": summary}
 
-
-# ---------------------------------------------------------------------------
-# Latent-trajectory visualisation
-# ---------------------------------------------------------------------------
 
 def visualise_belief(ctx: Context) -> dict:
     print("\n" + "=" * 74)
@@ -400,8 +367,6 @@ def visualise_belief(ctx: Context) -> dict:
     return {"door_id": did, "video": str(video) if video else None,
             "nearest_train_doors": [int(i) for i in near]}
 
-
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)

@@ -1,17 +1,8 @@
 """Checkpoint provenance: which frozen predictor did this result actually use?
 
-Stages 1-6 accumulated seventeen checkpoints, and the audit found four *different*
-predictors in use across Stage 3, Stage 5 and the geometry/UKF branch. That is
-defensible -- no single earlier stage trained on all six families -- but it was
-only discoverable by reading four modules and hashing the files by hand, and
-nothing would have complained if a fifth had appeared.
-
-This module makes the loaded checkpoint's identity part of the output. Every load
-goes through ``log_checkpoint`` and prints one line naming the stage, the sha256
-and the embedding-table shape. Where a config pins ``expected_sha256``, a
-mismatch raises instead of printing.
-
-It deliberately does NOT fix the divergence; it makes any future divergence loud.
+Several stages legitimately load different predictors. Every load goes through
+``log_checkpoint``, which prints the stage, sha256 and table shape, and raises if
+a config pinned ``expected_sha256``. This makes divergence loud, not impossible.
 
     python3.10 -m latent_mechanics.provenance      # table of every stage -> hash
 """
@@ -22,8 +13,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-# Where each stage's predictor path is defined, so the table below stays honest
-# about *why* a stage loads what it loads rather than just recording the path.
+# (stage, where its path is defined, path) -- the middle column records WHY
 STAGE_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("stage1_base", "train.py run_dir/run_name (cfg.train)",
      "runs/latent_mechanics/base/best.pt"),
@@ -69,11 +59,8 @@ def log_checkpoint(
     table_rows: int | None = None,
     extra: dict[str, Any] | None = None,
 ) -> str:
-    """Record (and optionally enforce) the identity of a predictor checkpoint.
-
-    ``expected_sha256`` may be a full hash or any leading prefix, so a config can
-    pin the first 16 hex characters and stay readable. Raises on mismatch.
-    """
+    """Record (and optionally enforce) a predictor checkpoint's identity.
+    ``expected_sha256`` may be a full hash or a leading prefix; raises on mismatch."""
     path = Path(path)
     digest = file_sha256(path)
     _seen[stage] = (digest, str(path))

@@ -1,26 +1,15 @@
-"""
-The curriculum, and the fixed evaluation suite.
+"""The curriculum, and the fixed evaluation suite.
 
-Seven levels of increasing *mechanical* diversity. The first two vary parameter
-spread within a single mechanism; the rest introduce new mechanisms one at a
-time, in order of how far they sit from a door.
+Seven levels of increasing mechanical diversity: the first two vary parameter
+spread within one mechanism, the rest add mechanisms one at a time.
 
-The one design decision that makes this a diversity study rather than a data
-study: **the training budget is held fixed.** Every level trains on the same
-number of mechanism instances and the same number of episodes per instance, so
-the total transition count is roughly constant and only the *mixture* changes.
-Without that control, "more diversity helps" would be indistinguishable from
-"more data helps", and the research question would be unanswerable.
+The training budget is held FIXED -- same instance count, same episodes each --
+so only the mixture changes and "more diversity helps" cannot be confused with
+"more data helps". The intended consequence is that higher levels see fewer
+instances of any given family.
 
-A direct consequence, and an intended one: as diversity rises, the model sees
-*fewer* instances of any given family. Level 2 sees 48 doors; level 7 sees 8. If
-performance on doors holds up anyway, that is the mechanics prior doing real
-work.
-
-The evaluation suite is generated once from a dedicated seed, contains unseen
-instances of all six real mechanisms, and is byte-identical for every level. It
-is packed as the held-out split of every level's dataset, so the same code path
-evaluates every model.
+The evaluation suite is drawn once from a dedicated seed and is byte-identical
+for every level, packed as each level's held-out split.
 """
 
 from __future__ import annotations
@@ -89,13 +78,8 @@ class CurriculumConfig:
 
 
 def split_budget(level: Level, total: int) -> dict[str, int]:
-    """Divide the fixed instance budget across a level's families.
-
-    Remainders go to the earliest families, which keeps doors slightly
-    over-represented -- the honest choice, since doors are the family every
-    level contains and the one whose count would otherwise jitter between
-    levels for purely arithmetic reasons.
-    """
+    """Divide the fixed instance budget across a level's families. Remainders go to
+    the earliest, so the door count does not jitter between levels."""
     n = len(level.families)
     base, rem = divmod(total, n)
     return {f: base + (1 if i < rem else 0) for i, f in enumerate(level.families)}

@@ -1,10 +1,8 @@
-"""
-Stage 3: robustness to model mismatch.
+"""Stage 3: robustness to model mismatch.
 
-Progressively more realistic violations of the assumed dynamics, applied one
-mechanism at a time, with Stages 1 and 2 untouched. The learned model is not
-retrained and RLS keeps its regressor -- both hold their original assumptions
-while the plant stops obeying them.
+Violations of the assumed dynamics, applied one mechanism at a time. The learned
+model is not retrained and RLS keeps its regressor: both hold their original
+assumptions while the plant stops obeying them.
 
     python3.10 -m latent_mechanics.mismatch.study
     python3.10 -m latent_mechanics.mismatch.tests

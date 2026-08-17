@@ -1,24 +1,16 @@
-"""
-Scaling curves and per-level latent geometry.
+"""Scaling curves and per-level latent geometry.
 
-The scaling curves are the primary result of Stage 5: mechanical diversity on
-the x-axis, generalisation / adaptation gain / failure rate on the y. Because
-the training budget is fixed, movement along the x-axis is diversity and nothing
-else.
+The scaling curves are Stage 5's primary result: diversity on x, generalisation /
+adaptation gain / failure rate on y. The budget is fixed, so x is diversity only.
 
-The latent-geometry panel answers the representation question with numbers
-rather than by eye. Four measures per level:
+The latent-geometry panel reports four measures per level:
 
-  log-inertia readout   leave-one-out R^2 predicting mechanical scale from z.
-  friction readout      the same, within family, so units cannot leak the answer.
-  geometry correlation  Spearman rank correlation between pairwise latent
-                        distance and pairwise mechanics distance. This is the
-                        "is the geometry smooth" measure: high means objects
-                        that behave similarly sit close together, which is
-                        exactly what an online optimiser needs to travel through.
-  effective dimension   participation ratio of the latent covariance. A prior
-                        that collapses to one axis cannot express variety; one
-                        that fills every axis is probably fitting noise.
+  log-inertia readout   leave-one-out R^2 for mechanical scale from z
+  friction readout      the same, within family, so units cannot leak the answer
+  geometry correlation  Spearman rank correlation of pairwise latent distance vs
+                        pairwise mechanics distance -- is the geometry smooth
+                        enough for an online optimiser to travel through
+  effective dimension   participation ratio of the latent covariance
 """
 
 from __future__ import annotations
@@ -56,16 +48,9 @@ def _save(fig, path: Path) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Latent geometry measures
-# ---------------------------------------------------------------------------
-
 def geometry_correlation(z: np.ndarray, mech: np.ndarray) -> float:
     """Spearman correlation of pairwise latent distance vs mechanics distance.
-
-    Mechanics are standardised (log-scaled where positive) before distances are
-    taken, so no single parameter with a wide range dominates.
-    """
+    Mechanics are standardised first, so no wide-range parameter dominates."""
     from scipy.stats import spearmanr
 
     if len(z) < 6:
@@ -125,10 +110,6 @@ def analyse_level_latents(out: Path, level_index: int, name: str) -> dict | None
         "_z": z, "_fams": fams, "_inertia": inertia,
     }
 
-
-# ---------------------------------------------------------------------------
-# Figures
-# ---------------------------------------------------------------------------
 
 def scaling_curves(summaries: dict, geo: list[dict], path: Path,
                    rls_ref: float | None = None) -> Path:

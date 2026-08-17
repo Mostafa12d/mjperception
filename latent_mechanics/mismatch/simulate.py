@@ -1,21 +1,12 @@
-"""
-The perturbed simulator.
+"""The perturbed simulator.
 
-Stage 1 rolls episodes out with ``run_door_dynamics_validation.simulate``, whose
-torque callback receives only the time. Stage-3 physics is *state dependent*
-(friction that varies with velocity or angle, elasticity that varies with angle),
-so it cannot be expressed through that callback and needs its own loop.
+``dyn.simulate``'s torque callback receives only the time, but Stage-3 physics is
+state dependent, so this needs its own loop. It mirrors ``dyn.simulate`` line for
+line, calling the same helpers in the same order, plus two hooks: one to mutate
+model parameters and one to add an unmodelled torque.
 
-This is the one place in Stage 3 that duplicates existing structure, and it is
-duplicated deliberately and minimally: the loop below is a line-for-line mirror
-of ``dyn.simulate``, calling the same helpers (``dyn.tangential_direction``,
-``dyn.hinge_torque_from_handle_force``) with the same ordering, plus two hooks --
-one to mutate model parameters and one to add an unmodelled torque.
-
-Because a silent divergence here would be indistinguishable from a real effect,
-``verify_matches_baseline`` asserts that with no perturbations this loop
-reproduces ``dyn.simulate`` to machine precision. It runs in the test suite and
-is the first thing to check if a Stage-3 result looks surprising.
+``verify_matches_baseline`` asserts the two agree to machine precision with no
+perturbations, since a silent divergence would look like a real effect.
 """
 
 from __future__ import annotations
@@ -45,12 +36,8 @@ class RolloutLog:
     gt: dict
 
     def as_dict(self) -> dict:
-        """Dict shaped exactly like ``dyn.simulate``'s output.
-
-        Lets Stage-1 helpers -- notably ``data_gen.transitions_from_log`` -- slice
-        these rollouts with no changes, so perturbed and ideal datasets are built
-        by identical code.
-        """
+        """Dict shaped like ``dyn.simulate``'s output, so Stage-1 helpers slice
+        perturbed and ideal rollouts with identical code."""
         return {
             "t": self.t, "theta": self.theta, "theta_dot": self.theta_dot,
             "theta_ddot": self.theta_ddot, "tau_oracle": self.tau_oracle,
@@ -64,13 +51,9 @@ def simulate_perturbed(
     n_steps: int,
     perturbations: Sequence[PlantPerturbation] = (),
 ) -> RolloutLog:
-    """Roll out one episode with optional unmodelled physics.
-
-    The commanded torque still enters through the handle exactly as in Stage 1,
-    and ``tau_ft`` -- the value recorded as the *action* -- is reconstructed from
-    that commanded force alone. Perturbation torque is added to the joint after
-    that reconstruction, so it never appears in the action the estimators see.
-    """
+    """Roll out one episode with optional unmodelled physics. ``tau_ft``, the
+    recorded action, is reconstructed from the commanded force alone; the
+    perturbation torque is added afterwards, so it never enters the action."""
     data = mujoco.MjData(model)
     assert abs(model.opt.timestep - dyn.DT) < 1e-12
 
@@ -138,12 +121,8 @@ def verify_matches_baseline(
     tau_fn: Callable[[float], float], model: mujoco.MjModel, n_steps: int,
     tol: float = 0.0,
 ) -> dict[str, float]:
-    """With no perturbations, must equal ``dyn.simulate`` exactly.
-
-    ``dyn.simulate`` reads ``N_STEPS`` from its module namespace, so the caller
-    is responsible for having set it (``data_gen.episode_length``). Returns the
-    per-signal max absolute deviation; raises if any exceeds ``tol``.
-    """
+    """With no perturbations, must equal ``dyn.simulate`` exactly. The caller must
+    have set ``N_STEPS`` (``data_gen.episode_length``). Raises past ``tol``."""
     import copy
 
     mine = simulate_perturbed(tau_fn, copy.deepcopy(model), n_steps, perturbations=())

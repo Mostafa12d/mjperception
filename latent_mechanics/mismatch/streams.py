@@ -1,23 +1,12 @@
-"""
-Building the interaction streams each experiment feeds to the estimators.
+"""Building the interaction streams each experiment feeds to the estimators.
 
-One stream = one unseen door, simulated under a given plant perturbation, then
-passed through a given sensor pipeline. The important invariant is that for a
-fixed door and severity level, *every method sees byte-identical input*: the
-rollout is generated once and the same transition list is handed to the
-no-adaptation control, the latent adaptor and both RLS variants.
+One stream = one unseen door under one plant perturbation and one sensor
+pipeline. The invariant: for a fixed door and level, every method sees
+byte-identical input.
 
-Two arrays come out of each stream:
-
-``transitions``  what the estimator observes -- possibly noisy, quantised,
-                 dropped or delayed.
-``clean_next``   what actually happened -- the true next state from the
-                 simulator, used only for scoring.
-
-Keeping those separate is what lets Experiment 1 measure whether an estimator
-still recovers the right dynamics *despite* bad sensing, instead of just
-measuring the sensor. Scoring against the noisy reading would put a floor of
-sigma under every method and hide the effect entirely.
+``transitions`` is what the estimator observes (possibly corrupted);
+``clean_next`` is what actually happened, used only for scoring. Keeping them
+separate is what measures the estimator rather than the sensor.
 """
 
 from __future__ import annotations
@@ -58,14 +47,9 @@ class DoorStream:
         return len(self.transitions)
 
     def motion_scale(self) -> np.ndarray:
-        """RMS true one-step change per dimension.
-
-        Errors are normalised by this. Without it the study is confounded: a
-        perturbation that slows the door down (more friction, say) shrinks every
-        absolute error and masquerades as an accuracy improvement. Normalised
-        error is the fraction of the actual motion left unexplained, so 1.0 means
-        no better than predicting "nothing changes".
-        """
+        """RMS true one-step change per dimension. Errors are normalised by this,
+        or a perturbation that slows the door down looks like an improvement.
+        1.0 means no better than predicting "nothing changes"."""
         d = self.clean_next - self.clean_state
         return np.sqrt(np.mean(d**2, axis=0)) if len(d) else np.ones(2)
 
@@ -94,13 +78,9 @@ def build_door_stream(
     exclude_near_limit: bool = True,
     episode_offset: int = 0,
 ) -> DoorStream:
-    """Simulate one door and turn it into an observed transition stream.
-
-    Excitation is drawn from a seed that depends only on the door and episode
-    index, never on the perturbation, so the *same* torque profile is replayed
-    at every severity level. Without that, a change in error could come from a
-    different trajectory rather than from the mismatch.
-    """
+    """Simulate one door into an observed transition stream. The excitation seed
+    depends only on door and episode, never the perturbation, so the same torque
+    profile replays at every severity level."""
     n_steps = int(round(episode_seconds / dyn.DT))
     sensors = sensors or SensorPipeline()
 
@@ -158,14 +138,9 @@ def build_door_stream(
 def clean_errors(log, stream: DoorStream) -> np.ndarray:
     """Re-score an ``AdaptationLog`` against the true next states.
 
-    ``AdaptationLog`` stores ``error = prediction - observed_target``, and the
-    prediction is fixed once made, so
-
-        clean_error = error + (observed_target - clean_target)
-
-    recovers the error against ground truth exactly, with no change to the
-    Stage-2 adaptor or driver. Under an identity sensor the correction is zero
-    and this returns ``log.error`` unchanged.
+    The prediction is fixed once made, so
+    ``clean_error = error + (observed_target - clean_target)`` is exact and needs
+    no change to the Stage-2 adaptor. Identity sensor -> unchanged.
     """
     n = len(log.error)
     return log.error + (stream.observed_next[:n] - stream.clean_next[:n])
@@ -175,20 +150,12 @@ __all__ = ["DoorStream", "build_door_stream", "heldout_doors", "clean_errors"]
 
 
 def frozen_predict_errors(adaptor, stream: DoorStream) -> np.ndarray:
-    """Error of a *frozen* belief on a stream, updating nothing.
+    """Error of a frozen belief on a stream, calling only ``predict``.
 
-    Calls only ``predict``, never ``observe``, so the belief the adaptor ended
-    adaptation with is evaluated as a fixed model. Works for any
-    ``OnlineAdaptor`` -- latent or RLS -- which is what keeps the comparison
-    symmetric.
-
-    This is the metric that separates the two things Experiment 1 conflates. A
-    stale or dropped reading makes the *instantaneous* prediction wrong no
-    matter how good your model is: you are being asked to predict forward from a
-    state that is already out of date, which costs every method the same
-    bookkeeping offset (~k steps of motion for latency, ~sqrt(p) for dropout).
-    Evaluating the learned belief afterwards on clean data asks the question we
-    actually care about: did the corrupted stream poison what you learned?
+    Separates the two things Experiment 1 conflates: a stale reading makes the
+    instantaneous prediction wrong for everyone regardless of model quality.
+    Scoring the final belief on clean data asks instead whether the corrupted
+    stream poisoned what was learned.
     """
     errs = []
     for (s_obs, a, _), truth in zip(stream.transitions, stream.clean_next):

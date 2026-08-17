@@ -1,33 +1,21 @@
 """Per-family control of the recorded timestep, and the harness to evaluate it.
 
-The audit found one family badly under-resolved at the 20 ms model step and a
-second marginal at its fast tail:
+The laptop is badly under-resolved at the 20 ms model step (tau_v = I/b down to
+2 ms) and nonlinear_hinge is marginal. MuJoCo integrates fine at 2 ms; the
+problem is that recording every 20 ms throws it away, leaving inertia nearly
+unidentifiable from (s, a, s').
 
-    family            tau_v = I/b            model steps per tau_v(min)
-    laptop            1.99 ms .. 36 ms       0.10      <- below one 2 ms integrator step
-    nonlinear_hinge   Stribeck band 27.5 ms  1.37      <- marginal
-    everything else                          >= 7.9
-
-MuJoCo integrates correctly at 2 ms (the laptop trajectory matches an independent
-stiff integration to 5.5e-4); the problem is that recording every 20 ms throws
-that away. Within one recorded laptop transition the velocity has already relaxed
-to terminal velocity, so inertia is close to unidentifiable from (s, a, s').
-
-Two independent knobs, because reducing frame_skip alone bottoms out: at
-frame_skip=1 the recorded step IS the integrator step, giving the laptop only
-~3 samples per tau_v.
+Two knobs, since reducing frame_skip alone bottoms out at the integrator step:
 
     frame_skip   recorded interval, in units of dyn.DT -> dt_model = DT * frame_skip
     substeps     integrator subdivision                -> mj_dt   = DT / substeps
 
-``TimeResolution(frame_skip=10, substeps=1)`` is the current setting exactly, and
-``test_time_resolution_matches_baseline`` asserts bit-identical output for it.
+``TimeResolution(10, 1)`` is exactly the current setting, asserted bit-identical
+by ``test_time_resolution_matches_baseline``.
 
-IMPORTANT, and the reason this is a measurement harness rather than a switch: the
-excitation is a zero-order hold on the *recorded* grid, so shrinking dt_model also
-shortens the action hold. A finer-dt dataset therefore differs from the baseline
-in two ways at once -- sampling rate and action bandwidth -- and the ZOH-per-
-transition invariant is what forces that coupling. Reported alongside the results.
+A measurement harness rather than a switch: the excitation is a ZOH on the
+RECORDED grid, so shrinking dt_model also shortens the action hold, and a finer
+dataset differs in both sampling rate and action bandwidth at once.
 
     python3.10 -m latent_mechanics.mechanisms.time_resolution --help
 """
@@ -90,10 +78,6 @@ def resolution_for(family: str, default: TimeResolution = BASELINE,
         family, default)
 
 
-# ---------------------------------------------------------------------------
-# Rollout at an arbitrary resolution
-# ---------------------------------------------------------------------------
-
 def rollout_at_resolution(
     params: lib.MechanismParams,
     cfg: ExperimentConfig,
@@ -106,18 +90,13 @@ def rollout_at_resolution(
 ) -> MechanismEpisodes:
     """One instance, integrated at ``res.mj_dt`` and recorded every ``res.dt_model``.
 
-    Deliberately does not reuse ``simulate_mechanism`` + ``transitions_from_log``:
-    both read ``dyn.DT`` from module scope, and the honest way to vary the
-    timestep is to make it explicit here rather than to monkeypatch a global that
-    every other stage also reads. The recorded quantities are identical in
-    meaning -- state after the interval, one constant action across it.
+    Does not reuse ``simulate_mechanism`` + ``transitions_from_log``, which read
+    ``dyn.DT`` from module scope; the timestep is explicit here instead of
+    monkeypatched. The recorded quantities mean the same thing.
     """
     n_steps_original = int(round(episode_seconds / dyn.DT))
-    # Block k spans [k*dt_model, (k+1)*dt_model). transitions_from_log starts at
-    # logged index frame_skip-1, i.e. the state AFTER block 0, and strides by one
-    # block -- so the first recorded transition is block 0's end to block 1's end,
-    # carrying block 1's action, and there are n_blocks - 1 of them. Matching that
-    # exactly is what makes TimeResolution(10, 1) a drop-in for the current path.
+    # matches transitions_from_log: the first transition spans block 0's end to
+    # block 1's end and carries block 1's action, so there are n_blocks - 1
     n_blocks = n_steps_original // res.frame_skip
     n_transitions = n_blocks - 1
     gt = lib.ground_truth(lib.build_model(params), params)
@@ -179,10 +158,6 @@ def rollout_at_resolution(
         gt=gt,
     )
 
-
-# ---------------------------------------------------------------------------
-# Diagnostics
-# ---------------------------------------------------------------------------
 
 def timescale_table(
     families: list[str], overrides: dict[str, TimeResolution], n: int = 300,

@@ -1,11 +1,8 @@
-"""
-Configuration for the latent-mechanics experiments.
+"""Configuration for the latent-mechanics experiments.
 
-Everything is a plain dataclass so the config is introspectable, type-checked at
-construction, and serialisable into a checkpoint. YAML files only need to list
-the fields they want to override; anything absent keeps the dataclass default.
+Plain dataclasses, so the config serialises into a checkpoint. YAML need only
+list the fields it overrides.
 
-    from latent_mechanics.config import load_config
     cfg = load_config("configs/latent_mechanics.yaml")
 """
 
@@ -19,37 +16,21 @@ from typing import Any
 import yaml
 
 
-# ---------------------------------------------------------------------------
-# Sections
-# ---------------------------------------------------------------------------
-
 @dataclass
 class DoorSamplingConfig:
-    """Ranges for the randomised mechanics of one door instance.
-
-    Each *door* is one draw from these ranges. A door keeps its physical
-    parameters across all of its episodes -- that is what makes a single
-    embedding vector able to describe it.
-    """
+    """Ranges for the randomised mechanics of one door. Each door is one draw and
+    keeps its parameters across all of its episodes."""
 
     n_train_doors: int = 48
-    # Doors generated but deliberately given no embedding row. They exist so the
-    # stage-2 online-adaptation experiment has genuinely unseen mechanics ready.
-    n_heldout_doors: int = 8
+    n_heldout_doors: int = 8    # generated but given no embedding row
 
     model_paths: list[str] = field(default_factory=lambda: ["door.xml"])
 
-    # Panel density [kg/m^3] -> scales mass and hinge inertia. Sampled log-uniform.
-    density_range: tuple[float, float] = (200.0, 1400.0)
-    # Coulomb friction at the hinge [N*m].
-    frictionloss_range: tuple[float, float] = (0.5, 6.0)
-    # Viscous damping [N*m*s/rad].
-    damping_range: tuple[float, float] = (0.02, 1.5)
-    # Torsional spring stiffness [N*m/rad]; 0 means a door with no self-closer.
-    stiffness_range: tuple[float, float] = (0.0, 8.0)
-    # Rest angle of that spring [rad].
-    springref_range: tuple[float, float] = (-0.1, 0.6)
-    # Fraction of doors forced to stiffness exactly 0 (plain doors, no closer).
+    density_range: tuple[float, float] = (200.0, 1400.0)   # kg/m^3, log-uniform
+    frictionloss_range: tuple[float, float] = (0.5, 6.0)   # N*m
+    damping_range: tuple[float, float] = (0.02, 1.5)       # N*m*s/rad
+    stiffness_range: tuple[float, float] = (0.0, 8.0)      # N*m/rad; 0 = no self-closer
+    springref_range: tuple[float, float] = (-0.1, 0.6)     # rad
     frac_no_spring: float = 0.3
 
 
@@ -57,32 +38,26 @@ class DoorSamplingConfig:
 class ExcitationConfig:
     """Torque profiles used to excite each episode.
 
-    The commanded torque is a zero-order hold on the *model* timestep grid
-    (``sim.frame_skip`` MuJoCo steps), so every recorded transition has exactly
-    one constant action -- see ``data_gen.py``.
+    The commanded torque is a zero-order hold on the model timestep grid, so
+    every recorded transition has exactly one constant action.
     """
 
-    # Every episode starts from the closed door (see excitation.py for why the
-    # starting angle cannot simply be randomised). The 'swing' profile is what
-    # supplies closing-direction data: a slow large-amplitude oscillation that
-    # drives the door open and then back shut.
+    # 'swing' is what supplies closing-direction data: a slow, large oscillation
     profile_weights: dict[str, float] = field(
         default_factory=lambda: {
             "multisine": 0.3, "steps": 0.2, "chirp": 0.2, "swing": 0.3,
         }
     )
-    # Constant push, sampled relative to the door's own friction so the door
-    # actually breaks away: bias ~ U(bias_over_friction) * frictionloss.
+    # bias ~ U(range) * frictionloss, so the door actually breaks away
     bias_over_friction_range: tuple[float, float] = (0.6, 2.0)
     amp_range: tuple[float, float] = (1.0, 7.0)
     freq_range: tuple[float, float] = (0.2, 3.0)  # Hz
     n_sines_range: tuple[int, int] = (2, 4)
     step_hold_range: tuple[float, float] = (0.2, 1.2)  # s
-    # 'swing' profile: amplitude relative to friction (must exceed 1 to break
-    # away in both directions) and a deliberately low frequency.
+    # must exceed 1 to break away in both directions
     swing_over_friction_range: tuple[float, float] = (1.4, 3.5)
     swing_freq_range: tuple[float, float] = (0.15, 0.5)  # Hz
-    tau_clip: float = 30.0  # N*m, matches the magnitudes the RLS baseline uses
+    tau_clip: float = 30.0  # N*m
 
 
 @dataclass
@@ -91,22 +66,15 @@ class SimConfig:
 
     episode_seconds: float = 6.0
     episodes_per_door: int = 8
-    # MuJoCo runs at 500 Hz (dt=0.002). The learned model predicts every
-    # ``frame_skip`` steps, i.e. dt_model = 0.002 * frame_skip. At 500 Hz the
-    # next state is nearly identical to the current one and the task collapses
-    # to the identity map, so a coarser model rate is essential.
+    # MuJoCo runs at 500 Hz; dt_model = 0.002 * frame_skip. At 500 Hz the task
+    # collapses to the identity map, so a coarser model rate is essential.
     frame_skip: int = 10
-    # Episodes per door reserved for validation (same doors, unseen episodes).
-    val_episodes_per_door: int = 2
+    val_episodes_per_door: int = 2   # same doors, unseen episodes
     seed: int = 0
     out_path: str = "data/door_mechanics.npz"
-    # Load-time filter (the .npz always stores every transition, so flipping
-    # this needs no regeneration). Transitions touching a joint limit carry a
-    # constraint torque that is not part of the action, so they are close to
-    # unpredictable from (state, action, z) alone -- and being ~50x larger than
-    # a typical step, they otherwise contribute ~90% of the squared error and
-    # drown out the mechanics signal entirely. The RLS baseline masks the same
-    # samples in ``moving_mask``.
+    # Load-time filter; the .npz always stores every transition. Limit-touching
+    # transitions carry a constraint torque outside the action and would
+    # otherwise contribute ~90% of the squared error.
     exclude_near_limit: bool = True
 
 
@@ -115,9 +83,7 @@ class ModelConfig:
     embed_dim: int = 16
     hidden_sizes: list[int] = field(default_factory=lambda: [256, 256])
     activation: str = "silu"  # silu | relu | tanh | gelu
-    # Predict next_state = state + delta instead of next_state directly. Keeps
-    # the network away from having to re-learn the identity map.
-    predict_delta: bool = True
+    predict_delta: bool = True   # avoids re-learning the identity map
     dropout: float = 0.0
     embedding_init_std: float = 0.1
 
@@ -136,9 +102,7 @@ class TrainConfig:
     num_workers: int = 0
     device: str = "auto"  # auto | cpu | cuda | mps
     seed: int = 0
-    # MSE is computed on the normalised delta so that angle [rad] and velocity
-    # [rad/s] contribute comparably. Mathematically this is still MSE between
-    # predicted and ground-truth next state, just with per-dimension scaling.
+    # normalised: MSE on the delta, so rad and rad/s contribute comparably
     loss_space: str = "normalized"  # normalized | raw
     log_every: int = 50  # optimiser steps between TensorBoard scalar writes
     rollout_eval_every: int = 10  # epochs between validation rollout metrics
@@ -152,8 +116,7 @@ class TrainConfig:
 @dataclass
 class EvalConfig:
     horizons: list[int] = field(default_factory=lambda: [1, 5, 10, 25, 50, 100])
-    # Number of episodes drawn for the rollout-overlay figure.
-    n_plot_episodes: int = 6
+    n_plot_episodes: int = 6   # episodes in the rollout-overlay figure
     out_dir: str = "runs/latent_mechanics/base/eval"
 
 
@@ -180,10 +143,6 @@ class ExperimentConfig:
         path.write_text(yaml.safe_dump(self.to_dict(), sort_keys=False))
 
 
-# ---------------------------------------------------------------------------
-# Loading
-# ---------------------------------------------------------------------------
-
 _SECTIONS = {f.name: f.type for f in dataclasses.fields(ExperimentConfig)}
 
 
@@ -197,7 +156,7 @@ def _build_section(cls: Any, values: dict[str, Any], section_name: str) -> Any:
         )
     kwargs = {}
     for key, val in values.items():
-        # YAML gives lists where the dataclass declares a tuple range.
+        # YAML gives lists where the dataclass declares a tuple range
         if isinstance(val, list) and "tuple" in str(known[key].type):
             val = tuple(val)
         kwargs[key] = val

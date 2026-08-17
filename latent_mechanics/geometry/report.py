@@ -1,9 +1,7 @@
-"""
-Runs Steps 1-6 of the latent-geometry investigation and writes the figures.
+"""Runs the latent-geometry investigation and writes its figures.
 
-Read-only with respect to model weights throughout. The one thing it may create
-is an additional trained checkpoint covering all six families (see
-``extract.build_all_families_checkpoint``), because no earlier stage produced one.
+Read-only w.r.t. model weights, except that it may create an all-families
+checkpoint via ``extract.build_all_families_checkpoint``.
 
     python3.10 -m latent_mechanics.geometry.report
 """
@@ -48,10 +46,8 @@ def _save(fig, path: Path) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-
 def figure_geometry(ds: LatentDataset, out: Path) -> Path:
-    """Step 2: PCA / UMAP / t-SNE, coloured by category and by instance."""
+    """PCA / UMAP / t-SNE, coloured by category and by instance."""
     methods = ["pca", "umap", "tsne"]
     fig, axes = plt.subplots(2, 3, figsize=(12, 7.4))
     for j, m in enumerate(methods):
@@ -77,7 +73,7 @@ def figure_geometry(ds: LatentDataset, out: Path) -> Path:
 
 
 def figure_multimodality(ev: dict, out: Path) -> Path:
-    """Step 3: selection criteria against a matched unimodal null."""
+    """Selection criteria against a matched unimodal null."""
     g = ev["gmm"]
     ks = [r.k for r in g]
     fig, axes = plt.subplots(1, 4, figsize=(14.5, 3.4))
@@ -125,7 +121,7 @@ def figure_multimodality(ev: dict, out: Path) -> Path:
 
 
 def figure_continuity(profiles: list[dict], out: Path) -> Path:
-    """Step 4: error while interpolating z between object pairs."""
+    """Error while interpolating z between object pairs."""
     within = [p for p in profiles if p["kind"] == "within"]
     across = [p for p in profiles if p["kind"] == "across"]
     fig, axes = plt.subplots(1, 3, figsize=(12.5, 3.5))
@@ -159,7 +155,7 @@ def figure_continuity(profiles: list[dict], out: Path) -> Path:
 
 
 def figure_linearity(jac: dict, lin: dict, attribution: dict, out: Path) -> Path:
-    """Steps 5-6: local linearity and error attribution."""
+    """Local linearity and error attribution."""
     fig, axes = plt.subplots(1, 3, figsize=(12.5, 3.5))
 
     ax = axes[0]
@@ -198,18 +194,14 @@ def figure_linearity(jac: dict, lin: dict, attribution: dict, out: Path) -> Path
 
 
 def per_object_data_scale(ds: LatentDataset) -> tuple[np.ndarray, np.ndarray]:
-    """Each object's OWN observed scale: log RMS step size and log RMS action.
-
-    Ground-truth inertia is the natural scale covariate but a filter never sees
-    it. These two are measurable from the object's own transitions, so they test
-    the same question using only what is actually observable.
-    """
+    """Each object's own observed scale: log RMS step size and log RMS action.
+    Unlike ground-truth inertia, these are things a filter can actually see."""
     with np.load(ds.npz_path, allow_pickle=False) as a:
         did, spl = a["door_id"], a["split"]
         st, nxt, act = a["state"], a["next_state"], a["action"]
     rms_dq, rms_a = [], []
     for i in range(len(ds)):
-        m = (did == i) & np.isin(spl, [0, 1])       # this object's train/val rows
+        m = (did == i) & np.isin(spl, [0, 1])       # train/val rows for this object
         d = nxt[m] - st[m]
         rms_dq.append(np.sqrt((d[:, 0] ** 2).mean()) if m.any() else np.nan)
         rms_a.append(np.sqrt((act[m][:, 0] ** 2).mean()) if m.any() else np.nan)
@@ -218,7 +210,7 @@ def per_object_data_scale(ds: LatentDataset) -> tuple[np.ndarray, np.ndarray]:
 
 
 def scale_dominance_for(ds: LatentDataset, k_max: int = 15, n_null: int = 20) -> dict:
-    """Step 3b on one latent dataset."""
+    """Scale-dominance statistics for one latent dataset."""
     inertia = ds.params[:, ds.param_names.index("inertia")]
     log_I = np.log10(np.maximum(inertia, 1e-12))
     log_dq, log_a = per_object_data_scale(ds)
@@ -255,7 +247,7 @@ def _print_scale_dominance(sd: dict) -> None:
 
 
 def figure_scale_dominance(sd: dict, out: Path) -> Path:
-    """Step 3b: excess silhouette and purity, before and after removing scale."""
+    """Excess silhouette and purity, before and after removing scale."""
     order = [k for k in ("raw", "resid_log_inertia", "resid_data_scale",
                          "resid_inertia_and_data_scale") if k in sd]
     short = {"raw": "raw z", "resid_log_inertia": "log-inertia\nout",
@@ -303,8 +295,6 @@ def figure_scale_dominance(sd: dict, out: Path) -> Path:
     fig.tight_layout()
     return _save(fig, out / "scale_dominance.png")
 
-
-# ---------------------------------------------------------------------------
 
 def run(out: Path, k_max: int = 15, n_null: int = 20, epochs: int = 40) -> dict:
     out.mkdir(parents=True, exist_ok=True)
@@ -358,7 +348,7 @@ def run(out: Path, k_max: int = 15, n_null: int = 20, epochs: int = 40) -> dict:
     _print_scale_dominance(sd)
     figure_scale_dominance(sd, out)
 
-    # ---- shared model + data for steps 4-6 -----------------------------
+    # shared model + data for the remaining steps
     model, table, _, _ = load_checkpoint(ckpt, device="cpu", stage="geometry_report")
     model.freeze()
     tr = DoorTransitionDataset(npz, "train", exclude_near_limit=False)
@@ -439,7 +429,7 @@ def run(out: Path, k_max: int = 15, n_null: int = 20, epochs: int = 40) -> dict:
             "explainable_fraction": float(np.median([r["explainable_fraction"] for r in sub])),
             "oracle_dist": float(np.median([r["oracle_dist_from_prior"] for r in sub])),
         }
-    # Online-adapted error, from the Stage-5 protocol, for the same objects.
+    # online-adapted error on the same objects
     from latent_mechanics.online.adaptor import GradientLatentAdaptor
     from latent_mechanics.online.config import load_config as load_online_config
     from latent_mechanics.online.loop import episode_stream, run_online_adaptation

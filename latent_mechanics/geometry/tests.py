@@ -1,14 +1,9 @@
-"""
-Self-checks for the latent-geometry investigation.
+"""Self-checks for the latent-geometry investigation.
 
-The analysis is only as trustworthy as its statistics, so the checks here are
-mostly about the measurement instruments rather than the pipeline: that the
-matched null actually behaves like a null, that the multimodality machinery can
-detect real modes when they exist and stays quiet when they do not, and that the
-Jacobian code computes PER-SAMPLE derivatives (an earlier version summed over the
-batch and inflated the linearisation error by ~200x).
+These test the measurement instruments rather than the pipeline: that the matched
+null behaves like a null, that the multimodality machinery finds real modes and
+stays quiet otherwise, and that the Jacobian code is per-sample.
 
-Run:
     python3.10 -m latent_mechanics.geometry.tests
 """
 
@@ -38,9 +33,7 @@ def test_null_is_a_null() -> None:
     m_err = np.mean([np.linalg.norm(n.mean(0) - z.mean(0)) for n in nulls])
     c_err = np.mean([np.linalg.norm(np.cov(n, rowvar=False) - np.cov(z, rowvar=False))
                      for n in nulls]) / np.linalg.norm(np.cov(z, rowvar=False))
-    # A correct null draws from N(mu, cov), so its sample mean is off by exactly
-    # the sampling error sqrt(tr(cov)/n) -- not by zero. Judge against that,
-    # not against an arbitrary constant.
+    # a correct null's sample mean is off by the sampling error, not by zero
     expected = np.sqrt(np.trace(np.cov(z, rowvar=False)) / len(z))
     check("null matches the mean to within sampling error",
           m_err < 2.0 * expected, f"{m_err:.3f} vs expected {expected:.3f}")
@@ -78,8 +71,7 @@ def test_jacobian_is_per_sample() -> None:
     A = rng.normal(size=(64, 1)).astype(np.float32)
     z0 = np.zeros(8)
 
-    # The relative first-order error must not depend on how many samples are
-    # scored; a batch-summed Jacobian makes it grow with n.
+    # relative error must not grow with n; a batch-summed Jacobian makes it
     e_small = an.linearization_error(m, z0, S[:8], A[:8], (0.05,), n_points=8, n_dirs=3)
     e_large = an.linearization_error(m, z0, S, A, (0.05,), n_points=64, n_dirs=3)
     check("linearisation error is independent of batch size",
@@ -137,11 +129,11 @@ def test_read_only() -> None:
 
 
 def test_residualise_and_purity_primitives() -> None:
-    """A4: the scale-dominance primitives do what they claim on known inputs."""
+    """The scale-dominance primitives do what they claim on known inputs."""
     print("\nScale-residualisation and purity primitives")
     rng = np.random.default_rng(0)
     scale = rng.normal(size=200)
-    # A latent that is PURELY a scale axis plus noise orthogonal to it.
+    # a latent that is purely a scale axis plus orthogonal noise
     z = np.outer(scale, rng.normal(size=8)) + 0.01 * rng.normal(size=(200, 8))
     r = an.residualise(z, [scale])
     check("residualising the generating covariate removes almost all variance",
@@ -151,7 +143,7 @@ def test_residualise_and_purity_primitives() -> None:
     check("residualising an unrelated covariate barely changes z",
           an.residualise(z, [rng.normal(size=200)]).var() / z.var() > 0.9)
 
-    # Purity: perfectly separated blobs -> 1.0; one shared blob -> ~chance.
+    # purity: separated blobs -> 1.0; one shared blob -> ~chance
     fam = np.array(["a"] * 50 + ["b"] * 50)
     sep = np.vstack([rng.normal(-8, 0.1, (50, 4)), rng.normal(8, 0.1, (50, 4))])
     check("separated families give purity 1.0",
@@ -169,16 +161,8 @@ def test_residualise_and_purity_primitives() -> None:
 
 
 def test_scale_dominance_reproduces_audit_numbers() -> None:
-    """A4: the committed pipeline must reproduce the audit's headline numbers.
-
-    The audit measured excess silhouette +0.256 on raw z, falling to +0.055 once
-    log-inertia is regressed out, with raw per-family 1-NN purities of
-    door 0.25 / drawer 0.90 / bifold 0.80. Those were computed in an ad hoc
-    script; this asserts the ported code agrees, so the numbers are reproducible
-    by running the pipeline.
-
-    Skips (rather than fails) if the geometry artefacts have not been generated.
-    """
+    """The pipeline must reproduce the audit's headline numbers, so they stay
+    reproducible from the committed code. Skips if the artefacts are absent."""
     from pathlib import Path
 
     print("\nscale_dominance reproduces the audit's numbers")
@@ -211,7 +195,7 @@ def test_scale_dominance_reproduces_audit_numbers() -> None:
         check(f"raw 1-NN purity for {fam} is {want:.2f}",
               abs(pur[fam] - want) < 1e-9, f"{pur[fam]:.3f}")
 
-    # The qualitative conclusion, asserted as a property rather than a constant.
+    # the conclusion itself, as a property rather than a constant
     check("removing log-inertia collapses most of the excess",
           sd["fraction_of_excess_explained_by_inertia"] > 0.7,
           f"{sd['fraction_of_excess_explained_by_inertia']:.2f}")

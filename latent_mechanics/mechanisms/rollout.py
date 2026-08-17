@@ -1,15 +1,8 @@
-"""
-Generic rollout and dataset generation for the mechanism suite.
+"""Generic rollout and dataset generation for the mechanism suite.
 
-One simulator serves every family. It applies the action directly to the
-observed degree of freedom, so revolute and prismatic joints go through exactly
-the same code path -- there is no per-family branch anywhere in the loop, which
-is what makes "the interface is unchanged" a checkable claim rather than a
-description.
-
-Transitions are sliced by Stage 1's ``transitions_from_log``, unchanged, so the
-zero-order-hold alignment and the frame-skip convention are identical to every
-earlier stage.
+One simulator serves every family, applying the action directly to the observed
+degree of freedom, so there is no per-family branch anywhere in the loop.
+Transitions are sliced by Stage 1's ``transitions_from_log`` unchanged.
 """
 
 from __future__ import annotations
@@ -55,10 +48,7 @@ def simulate_mechanism(
     perturbations: Sequence[PlantPerturbation] = (),
 ) -> MechanismLog:
     """Roll out one episode, applying the action as a generalised force.
-
-    Unobserved degrees of freedom (the bi-fold leaf) evolve freely and are never
-    logged -- that is the point of including such a mechanism.
-    """
+    Unobserved DOFs (the bi-fold leaf) evolve freely and are never logged."""
     data = mujoco.MjData(model)
     qadr, dof, _ = lib.joint_info(model)
     for p in perturbations:
@@ -94,11 +84,8 @@ def simulate_mechanism(
 
 
 def limit_margin_for(lo: float, hi: float) -> float:
-    """Absolute limit margin for a joint spanning ``[lo, hi]``.
-
-    Expressed as a fraction of travel so it means the same thing for a 0.5 m
-    drawer and a 2.26 rad door.
-    """
+    """Absolute limit margin for a joint spanning ``[lo, hi]``, as a fraction of
+    travel so it means the same for a 0.5 m drawer and a 2.26 rad door."""
     return LIMIT_MARGIN_FRAC * (hi - lo)
 
 
@@ -151,10 +138,8 @@ def rollout_mechanism(
         model = lib.build_model(params)
         log = simulate_mechanism(profile.as_fn(), model, n_steps,
                                  lib.perturbations_for(params))
-        # This mechanism's own joint range, not the door's -- see
-        # data_gen.transitions_from_log. With the range and margin passed
-        # through, tr["near_limit"] is correct here and is the single source of
-        # truth instead of being recomputed below.
+        # this mechanism's own joint range, not the door's, so tr["near_limit"]
+        # is correct here and is the single source of truth
         tr = transitions_from_log(log.as_stage1_dict(), frame_skip,
                                   joint_range=(lo, hi),
                                   limit_margin=limit_margin_for(lo, hi))

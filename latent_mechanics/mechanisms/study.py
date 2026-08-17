@@ -1,21 +1,14 @@
-"""
-Stage 4: cross-mechanism generalisation.
+"""Stage 4: does the embedding represent doors, or interaction mechanics?
 
-Does the mechanics embedding represent *doors*, or *interaction mechanics*?
-
-Three experiments, each training the frozen architecture on a different mixture
-of mechanism families and then running unchanged Stage-2 online adaptation on
-families it has never seen:
+Three experiments, each training on a different mixture of families and then
+running unchanged Stage-2 adaptation on families it has never seen:
 
   1. train on doors            -> adapt to unseen doors, drawers, laptops
   2. train on doors + drawers  -> adapt to laptops (does diversity help?)
   3. leave-one-family-out      -> adapt to the held-out family, for all six
 
-Only the environment and the training mixture change. The dynamics predictor,
-the latent representation and the adaptation algorithm are imported from earlier
-stages and used as-is.
+Only the environment and the training mixture change.
 
-Run:
     python3.10 -m latent_mechanics.mechanisms.study
     python3.10 -m latent_mechanics.mechanisms.study --only 1,2
 """
@@ -56,13 +49,8 @@ METHODS = ("no-adaptation", "latent-gd", "rls-5p")
 
 
 def _nrmse(err: np.ndarray, state: np.ndarray, nxt: np.ndarray) -> tuple[float, float]:
-    """Error normalised by true motion, per dimension.
-
-    Absolutely essential here: a drawer moves 0.5 m and a door 2.3 rad, so raw
-    RMSE cannot be compared across families at all. Normalised error is the
-    fraction of actual motion left unexplained; 1.0 means no better than
-    predicting that nothing changes.
-    """
+    """Error normalised by true motion, per dimension. Raw RMSE is meaningless
+    across families; 1.0 means no better than predicting that nothing changes."""
     d = nxt - state
     scale = np.maximum(np.sqrt(np.mean(d**2, axis=0)), 1e-12)
     return (float(np.sqrt(np.mean(err[:, 0] ** 2)) / scale[0]),

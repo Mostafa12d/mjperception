@@ -1,16 +1,11 @@
-"""
-Building multi-mechanism datasets.
+"""Building multi-mechanism datasets.
 
-The suite is simulated once and cached; each experiment then repacks the same
-episodes into a Stage-1-format ``.npz`` with a different train/hold-out
-assignment. That matters twice over: it keeps the experiments comparable (they
-see identical trajectories, only the split changes) and it means
-``latent_mechanics.train`` and ``DoorTransitionDataset`` run completely
-unmodified, which is the point of Stage 4.
+The suite is simulated once and cached; each experiment repacks the same episodes
+into a Stage-1-format ``.npz`` with a different split, so experiments see
+identical trajectories and Stage-1 code runs unmodified.
 
-Mechanism family and physical parameters are stored as labels for analysis. They
-are never inputs -- the model still sees only ``(state, action, door_id)``, and
-``door_id`` is an opaque row index.
+Family and physical parameters are stored as analysis labels only; the model
+still sees just ``(state, action, door_id)``.
 """
 
 from __future__ import annotations
@@ -77,24 +72,12 @@ def build_dataset_npz(
 ) -> Path:
     """Repack episodes into the Stage-1 ``.npz`` layout for a given split.
 
-    Training instances occupy embedding rows ``0..n_train-1``; held-out instances
-    get ids above that range, so an accidental table lookup fails loudly instead
-    of silently borrowing another mechanism's latent.
+    Training instances take embedding rows ``0..n_train-1``; held-out ids run
+    above that, so a stray lookup fails loudly.
 
-    Two ways to specify the split:
-
-    ``heldout_pops`` given
-        Explicit. ``pops`` is the training set and ``heldout_pops`` the held-out
-        set, regardless of family. **Required whenever a held-out instance
-        belongs to a family that is also being trained on** -- for example an
-        unseen door evaluated by a model that was trained on other doors. The
-        family-based rule below would quietly move such an instance into
-        training and the "unseen" evaluation would be measuring memorisation.
-
-    ``heldout_pops`` omitted
-        Partition by family: anything in ``train_families`` trains, everything
-        else is held out. Valid only when the held-out families are disjoint
-        from the training families.
+    Passing ``heldout_pops`` splits explicitly and is REQUIRED whenever a held-out
+    instance belongs to a family also being trained on. Omitting it partitions by
+    family, which is valid only when the two family sets are disjoint.
     """
     if heldout_pops is not None:
         train_pops = list(pops)
@@ -117,9 +100,8 @@ def build_dataset_npz(
         param_rows.append(pop.params)
 
         uniq = np.unique(pop.episode_id)
-        # Never let the validation reservation consume every episode: an
-        # instance with a single episode would otherwise contribute nothing to
-        # training and the split would silently come back empty.
+        # never let validation consume every episode, or a one-episode instance
+        # contributes nothing to training
         n_val = min(val_episodes, max(0, len(uniq) - 1))
         val_ids = set(uniq[-n_val:].tolist()) if is_train and n_val else set()
         for e in uniq:

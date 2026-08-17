@@ -1,28 +1,15 @@
-"""
-What structure does the latent space learn?
+"""What structure does the latent space learn: category, or mechanics?
 
-The paper hypothesis is not "the embedding represents doors" but "the embedding
-represents interaction mechanics". Those two make different predictions about
-the geometry of the latent space:
+The two hypotheses differ geometrically -- clustering by mechanism family, versus
+organising by behaviour so a heavy stiff drawer sits near a heavy stiff door --
+so both are measured:
 
-  category hypothesis   embeddings cluster by mechanism FAMILY, and a drawer
-                        sits far from every door regardless of how it behaves.
-  mechanics hypothesis  embeddings organise by mechanical BEHAVIOUR -- inertia,
-                        friction, stiffness -- and a heavy stiff drawer sits
-                        near a heavy stiff door.
+  family separability   leave-one-out 1-NN accuracy of the family label
+  mechanics readout     leave-one-out ridge R^2 on each physical parameter,
+                        computed WITHIN a family so between-family scale
+                        differences cannot inflate it
 
-They are distinguishable and this module measures which one holds, rather than
-inviting a reader to squint at a scatter plot. Two quantitative tests:
-
-  *family separability* -- how well a classifier recovers the family label from
-    the latent alone, via leave-one-out nearest neighbour. High means the space
-    is organised by category.
-  *mechanics readout* -- leave-one-out ridge R^2 predicting each physical
-    parameter from the latent, computed WITHIN a family so it cannot be
-    inflated by between-family scale differences.
-
-Both are reported, because the honest answer can be "both": a space can encode
-category and behaviour on different axes.
+Both are reported; a space can encode category and behaviour on different axes.
 """
 
 from __future__ import annotations
@@ -60,16 +47,9 @@ def _save(fig, path: Path) -> Path:
     return path
 
 
-# ---------------------------------------------------------------------------
-# Quantitative structure tests
-# ---------------------------------------------------------------------------
-
 def family_separability(z: np.ndarray, families: np.ndarray) -> dict:
-    """Leave-one-out 1-NN accuracy of family from the latent alone.
-
-    Compared against the majority-class rate, so a suite with unbalanced
-    families cannot look separable by accident.
-    """
+    """Leave-one-out 1-NN accuracy of family from the latent alone, compared
+    against the majority-class rate so unbalanced suites cannot look separable."""
     n = len(z)
     if n < 3:
         return {"accuracy": float("nan"), "chance": float("nan")}
@@ -107,13 +87,8 @@ def mechanics_readout(
 def within_family_readout(
     z: np.ndarray, families: np.ndarray, params: dict[str, np.ndarray]
 ) -> dict:
-    """Mechanics readout computed inside each family, then pooled.
-
-    Doing this across families would be misleading: a drawer's friction is in
-    newtons and a door's in newton-metres, so a probe could score well purely by
-    identifying the family. Within a family the units are fixed, so any signal
-    is genuinely about mechanics.
-    """
+    """Mechanics readout inside each family, then pooled. Across families a probe
+    could score well purely by identifying the family, whose units differ."""
     out: dict[str, dict[str, float]] = {}
     for col, vals in params.items():
         per_family = {}
@@ -151,10 +126,6 @@ def embed_2d(z: np.ndarray, method: str, seed: int = 0) -> tuple[np.ndarray, str
             return np.asarray(r), "t-SNE (UMAP unavailable)"
     raise ValueError(method)
 
-
-# ---------------------------------------------------------------------------
-# Figures
-# ---------------------------------------------------------------------------
 
 def latent_structure_figure(
     z: np.ndarray, families: np.ndarray, params: dict[str, np.ndarray],
@@ -249,8 +220,6 @@ def structure_bar_figure(sep: dict, readout: dict, path: Path) -> Path:
     fig.tight_layout()
     return _save(fig, path)
 
-
-# ---------------------------------------------------------------------------
 
 def run_all(out: Path, results: dict, rows: list[dict]) -> dict:
     """Analyse the richest checkpoint: the one trained on the most families."""

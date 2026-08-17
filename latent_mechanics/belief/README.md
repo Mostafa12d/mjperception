@@ -6,6 +6,8 @@ than by preference — see [../geometry/README.md](../geometry/README.md).
 
 ```bash
 python3.10 -m latent_mechanics.belief.test_ukf_reference   # Step-3 checkpoint
+python3.10 -m latent_mechanics.belief.calibrate_noise      # measure R's floor
+python3.10 -m latent_mechanics.belief.ablation             # the two defects + fixes
 python3.10 -m latent_mechanics.belief.sweep --objects 60   # d and noise sweep
 ```
 
@@ -14,11 +16,56 @@ python3.10 -m latent_mechanics.belief.sweep --objects 60   # d and noise sweep
 | file | role |
 |---|---|
 | `basis.py` | Step 2. Frozen affine map `z = z_mean + V_d z_r`, persisted artifact |
-| `ukf.py` | Step 3. Generic UKF over `(fx, hx)`; knows nothing about this project |
-| `noise.py` | Step 4. `FixedNoise` / `InnovationAdaptiveNoise` (Mehra / RAUKF) |
+| `ukf.py` | Step 3. Generic UKF over `(fx, hx)`; knows nothing about this project. Standard and iterated (IPLF) updates |
+| `noise.py` | Step 4. `FixedNoise` / `InnovationAdaptiveNoise` / `ResidualAdaptiveNoise` |
 | `adaptor.py` | Step 5. `UKFLatentAdaptor`, same interface as `GradientLatentAdaptor` |
-| `sweep.py` | d = 4,5,6 × adaptive/fixed R, scored against the oracle ceiling |
-| `test_ukf_reference.py` | filterpy validation |
+| `calibrate_noise.py` | Measures the predictor's irreducible residual — the floor on `R` |
+| `ablation.py` | The two measurement-path defects, one change at a time |
+| `sweep.py` | d = 4,5,6 × noise model, scored against per-object oracle ceilings |
+| `test_ukf_reference.py` | filterpy validation, IPLF correctness, noise-model checks |
+
+## Two defects, found by asking a question prediction error cannot answer
+
+Every UKF number originally reported here was measured with `alpha=0.3` and the
+innovation-form adaptive `R`. Both were wrong, and **prediction error was nearly
+blind to it** — it moves by ~10% across settings that swing the latent's physical
+decodability from `R² = −0.11` to `R² = +0.42`. The sweep, which scored only
+prediction, therefore selected settings that were quietly destroying the latent.
+What exposed it was checking whether the *estimated latent still decodes the
+physical parameters*.
+
+**1. The unscented transform was invalid over the prior.** The prior is the whole
+training cloud (per-axis sd up to 2.71); the predictor is locally linear in `z`
+only out to `|dz| ≈ 0.25`. Sigma points landed 2.6× (median) to 8.0× (max) beyond
+that. Against 20k-sample Monte Carlo the transform mispredicted the measurement
+by **2.62** in normalised units where the true residual at the filter's own mean
+was **1.31** — the innovation was 2:1 transform error over signal. `alpha=0.3,
+kappa=0` compounded it: at `d=6` it gives `Wm[0] = −10.11`, `Wc[0] = −7.20`, so
+the transform's mean and covariance are differences of large numbers. `alpha` is
+not a free "keep the points close" knob; with `kappa=0` it sets the weights too.
+
+*Fix:* non-negative weights (`alpha=1.0`) plus an **iterated posterior
+linearisation** update (IPLF, García-Fernández et al. 2015). Each iteration
+re-draws the sigma points around the current *posterior* and redoes the update
+*from the prior* with that better linearisation. Shrinking `P0` would also work
+and is deliberately **not** used — it buys accuracy by declaring less prior
+uncertainty than we actually have, which defeats the purpose of filtering.
+
+**2. Adaptive `R` collapsed onto the uninformative channel.** `R̂ = C_ν − Pzz` is
+a *difference*, and it went indefinite on **30–41%** of steps, clipped to a scalar
+`1e-6` floor each time. That floor sits **452× below** the smallest eigenvalue of
+the predictor's measured irreducible residual, and being scalar it cannot express
+the 0.77 correlation between the two channels. The collapsed direction was
+`d_theta` on **all six families** — the channel **4–13× less sensitive to `z`**,
+because it is essentially kinematic (`Δθ ≈ dt·ω`). The filter placed near-infinite
+confidence in the measurement carrying almost no mechanics; gains ran to **146**.
+
+*Fix:* the residual form `R̂ = (1/N) Σ εεᵀ + Pzz_post`, a **sum** of PSD terms, so
+it cannot go negative and never needs rescuing. Floored at the measured matrix
+`IRREDUCIBLE_R = [[1.13e-3, 1.06e-2], [1.06e-2, 1.68e-1]]` (120 objects, 119,667
+transitions; regenerate with `calibrate_noise.py`) in the Loewner order. The floor
+is a modelling statement, not a numerical guard: the filter may never believe the
+predictor is a better sensor than it provably is.
 
 ## Correctness
 
@@ -36,6 +83,16 @@ Kalman filter unless `Q = 0`; regenerating the sigma points does, to 1e-12.**
 Both are implemented and both behaviours are asserted in the tests.
 `regenerate_sigma_points` defaults to `False` in the core (reference parity) and
 `True` in `UKFConfig` (correctness for our identity-`fx`, `Q > 0` setting).
+
+The iterated update has no filterpy counterpart, so it is pinned by two
+properties instead. On an **affine** `h` the statistical linear regression is
+exact, so every iteration produces the same linearisation and the result must
+equal the textbook Kalman update for *any* iteration count — asserted at 1, 2 and
+5 iterations to 1e-9. If iterating changed the answer there, the measurement
+would be getting folded in more than once, which is the standard way to build an
+overconfident iterated filter. On a nonlinear `h` the tests assert that iterating
+*reduces* the post-update residual while **not** shrinking `P` below the one-shot
+bound.
 
 ## Design decisions and their evidence
 
@@ -59,9 +116,15 @@ be set a priori. Letting the filter measure its own noise floor is also the
 principled form of the "when not to adapt" gate that Stages 4 and 5 both
 identified as missing: when residuals are dominated by model error, `R` grows,
 the gain shrinks, and the belief stops chasing noise without needing a heuristic.
+This argument was right and the *implementation* of it was the bug — see the two
+defects above. The same 47% figure is what `calibrate_noise.py` now measures from
+the other side, as a covariance, and uses as `R`'s floor.
 
-**One batched forward pass per update.** All 2d+1 sigma points go through the
-predictor together, so a UKF step costs about the same as a gradient step.
+**One batched forward pass per iteration.** All 2d+1 sigma points go through the
+predictor together. With IPLF this is one batched call per iteration; `iter_tol`
+exits early, so the mean is **2.41 of 3** iterations, and an update costs ~610 µs
+against ~350 µs for a gradient step. The filter is no longer cheaper than the
+module it replaces — that is the honest price of a valid transform.
 
 ## Results (60 unseen objects, six families)
 

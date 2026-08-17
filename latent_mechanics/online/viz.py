@@ -1,16 +1,8 @@
-"""
-Figures for Stage-2 online adaptation.
+"""Figures for Stage-2 online adaptation.
 
-The centrepiece is the latent-trajectory view: PCA is fitted on the *training*
-embeddings so the axes mean the same thing as in the Stage-1 latent-space figure,
-and the unseen door's belief is projected into that fixed frame as it adapts.
-Watching ``z0 -> z1 -> ... -> zT`` travel from its initialisation into the region
-occupied by mechanically similar training doors is the clearest statement of what
-online adaptation is doing: the robot is moving through a space of hypotheses
-about the object.
-
-The PCA basis is fitted once on the training latents and reused for every frame.
-Refitting per frame would make the axes drift and the motion meaningless.
+The centrepiece is the latent-trajectory view: the unseen door's belief projected
+into a PCA frame fitted once on the training embeddings, so the axes match the
+Stage-1 figure and do not drift between frames.
 """
 
 from __future__ import annotations
@@ -192,13 +184,8 @@ def animate_latent_trajectory(
     stride: int = 20,
     fps: int = 20,
 ) -> Path | None:
-    """Render the belief trajectory as a video.
-
-    Frames are drawn with the Agg canvas and written with imageio, matching how
-    the rest of the repository produces video. Returns ``None`` (with a warning)
-    if no encoder is available -- the static figures already carry the result, so
-    a missing codec should not fail an experiment run.
-    """
+    """Render the belief trajectory as a video. Returns ``None`` with a warning if
+    no encoder is available, rather than failing the run."""
     try:
         import imageio.v2 as imageio
     except Exception as exc:  # pragma: no cover

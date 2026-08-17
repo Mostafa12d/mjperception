@@ -1,28 +1,16 @@
-"""
-Plant-level model mismatch: physics the estimators do not know about.
+"""Plant-level model mismatch: physics the estimators do not know about.
 
-Each perturbation is an independent, configurable object that contributes an
-extra hinge torque and/or mutates MuJoCo model parameters during a rollout.
-Nothing is hard-coded into the simulator -- ``simulate.py`` just asks whatever
-perturbations it was handed for their contribution each step, so an empty list
-reproduces the ideal plant exactly.
+Each perturbation contributes an extra hinge torque and/or mutates MuJoCo model
+parameters during a rollout; an empty list reproduces the ideal plant exactly.
+The recorded action never includes the perturbation, and each class holds one
+mechanism, so an effect attributes to one violated assumption.
 
-Two rules that keep the science clean:
+Against the RLS regressor ``tau = I*thdd + mu*sign(thd) + b*thd + k*th + c``:
 
-1. **The recorded action never includes the perturbation.** The robot commands a
-   hinge torque and records that; the extra physics is, by construction,
-   unmodelled and unobserved. Anything else would leak the answer.
-
-2. **One mechanism per class.** Experiments enable them one at a time so an
-   effect can be attributed to a specific violated assumption.
-
-What each one violates, relative to the RLS regressor
-``tau = I*thdd + mu*sign(thd) + b*thd + k*th + c``:
-
-  StribeckFriction         friction depends nonlinearly on |thd|
+  StribeckFriction           friction nonlinear in |thd|
   PositionDependentFriction  friction depends on th, which no term captures
-  NonlinearCompliance      elastic torque is cubic in th, not linear
-  ParameterDrift           I, mu, b, k are no longer constants
+  NonlinearCompliance        elastic torque cubic in th, not linear
+  ParameterDrift             I, mu, b, k are no longer constants
 """
 
 from __future__ import annotations
@@ -54,13 +42,8 @@ class PlantPerturbation(ABC):
 
 
 def smooth_sign(x: float, width: float) -> float:
-    """``tanh(x/width)`` -- a differentiable stand-in for ``sign``.
-
-    A hard ``sign`` applied as an external torque makes the solver chatter when
-    the joint is nearly at rest, which would show up as a simulation artefact
-    rather than as physics. ``width`` is small enough (default 1e-3 rad/s) that
-    the two agree wherever the door is actually moving.
-    """
+    """``tanh(x/width)``: a smooth ``sign``, so an external torque does not make the
+    solver chatter near rest. Agrees with ``sign`` wherever the door is moving."""
     return float(np.tanh(x / max(width, 1e-12)))
 
 
@@ -70,15 +53,9 @@ class StribeckFriction(PlantPerturbation):
 
         tau_extra = -(mu_s - mu_c) * exp(-(|thd| / v_s)^delta) * sign(thd)
 
-    MuJoCo's own ``frictionloss`` already provides the Coulomb level ``mu_c``,
-    so this adds only the *excess* near zero velocity -- the "breakaway" hump of
-    the classic Stribeck curve. It vanishes at speed, meaning the plant reduces
-    to the ideal one wherever the door is moving quickly, and the mismatch is
-    concentrated exactly where the door starts and stops.
-
-    This is the textbook violation of linear-in-parameters identification: the
-    dependence on ``v_s`` cannot be written as a fixed regressor column, so no
-    reparameterisation of the RLS model can absorb it.
+    MuJoCo's ``frictionloss`` already gives the Coulomb level, so this adds only
+    the breakaway excess near zero velocity. The dependence on ``v_s`` cannot be
+    a fixed regressor column, so no RLS reparameterisation absorbs it.
     """
 
     excess: float = 1.5  # mu_s - mu_c, N*m
@@ -97,12 +74,11 @@ class StribeckFriction(PlantPerturbation):
 
 @dataclass
 class PositionDependentFriction(PlantPerturbation):
-    """A hinge that is rough in places -- friction varying with door angle.
+    """A worn or contaminated bearing: friction varying with door angle.
 
         tau_extra = -amplitude * sin(2*pi*theta/period + phase) * sign(thd)
 
-    Physically this is a worn or contaminated bearing. It is invisible to any
-    regressor whose friction term is a constant times ``sign(thd)``, and unlike
+    Invisible to any constant-times-``sign(thd)`` friction term, and unlike
     Stribeck it persists at all speeds.
     """
 
@@ -126,16 +102,10 @@ class NonlinearCompliance(PlantPerturbation):
 
         tau_extra = -k3 * theta^3  -  k_seal * theta * exp(-(theta/width)^2)
 
-    The cubic term is a hardening elastic element; the second is a door seal or
-    latch detent that resists only near closed. Both are ordinary door physics
-    and both are 1-DOF, so the state stays Markov in ``(theta, theta_dot)`` and
-    the learned model could in principle represent them -- the question is
-    whether adapting a latent is enough to do so.
-
-    The *linear* part of hinge stiffness is deliberately left to MuJoCo's own
-    ``jnt_stiffness``, which the RLS regressor already models through its
-    ``k*th`` term. Only the nonlinear excess is mismatch, which is what makes
-    this a single-source experiment rather than two changes at once.
+    A hardening element plus a seal or latch detent near closed. Both are 1-DOF,
+    so the state stays Markov and the learned model could represent them. The
+    linear part is left to MuJoCo's ``jnt_stiffness``, which RLS already models,
+    so only the nonlinear excess is mismatch.
     """
 
     k_cubic: float = 2.0  # N*m/rad^3
@@ -157,17 +127,11 @@ class NonlinearCompliance(PlantPerturbation):
 class ParameterDrift(PlantPerturbation):
     """Slowly time-varying mechanics: the door warms up, dries out, or wears.
 
-    Multiplies the nominal friction / damping / stiffness by a factor that
-    ramps over the episode. ``mode`` selects the shape:
+    Scales friction / damping / stiffness over the episode. ``mode`` is
+    ``linear`` (1 + rate*t), ``ramp`` (held after ``t_hold``) or ``sine``.
 
-        ``linear``  factor = 1 + rate * t        (monotone drift)
-        ``ramp``    same, but held after ``t_hold``
-        ``sine``    factor = 1 + rate * sin(2*pi*f*t)   (cyclic)
-
-    This is the one perturbation that violates *stationarity* rather than
-    functional form. RLS is not defenceless here -- its forgetting factor
-    (lam = 0.995) exists precisely to track drift -- so this experiment is a
-    genuine test of tracking, not a rigged one.
+    The one perturbation violating stationarity rather than functional form. RLS
+    is not defenceless: its forgetting factor exists to track drift.
     """
 
     friction_rate: float = 0.0

@@ -1,16 +1,11 @@
-"""
-Configuration for the Stage-3 robustness study.
+"""Configuration for the Stage-3 robustness study.
 
-Every source of mismatch is enabled independently through a ``Sweep``: one
-mechanism, one parameter, a list of severity levels whose first entry is always
-the unperturbed control. Nothing is hard-coded in the simulator or the study
-driver -- adding a new mismatch means adding a ``PlantPerturbation`` subclass and
-one ``Sweep`` entry.
+Each mismatch is one ``Sweep``: one mechanism, one parameter, severity levels
+whose first entry is the unperturbed control. Adding a mismatch means adding a
+``PlantPerturbation`` subclass and one ``Sweep``.
 
-Severity levels below were calibrated by measuring the RMS unmodelled torque
-each setting produces against the 5.96 N*m RMS commanded torque of the held-out
-population, so the plant sweeps are roughly comparable to one another at
-approximately 0%, 3%, 10% and 30% unmodelled torque.
+Levels are calibrated so the plant sweeps sit at roughly 0%, 3%, 10% and 30%
+unmodelled torque relative to the population's RMS commanded torque.
 """
 
 from __future__ import annotations
@@ -25,28 +20,15 @@ import yaml
 
 @dataclass
 class Sweep:
-    """One mismatch mechanism swept over severity levels.
-
-    Args:
-        name: identifier used in filenames and tables.
-        kind: ``"plant"`` (needs re-simulation) or ``"sensor"`` (post-processes
-            an ideal rollout).
-        target: for plant sweeps, the ``PERTURBATION_TYPES`` key; for sensor
-            sweeps, unused.
-        param: the field varied.
-        levels: severity values. ``levels[0]`` must be the no-mismatch control.
-        fixed: other constructor arguments held constant.
-        label: axis label for figures.
-        experiment: which numbered experiment this belongs to.
-    """
+    """One mismatch mechanism swept over severity levels."""
 
     name: str
-    kind: str
-    param: str
-    levels: list[Any]
-    target: str = ""
+    kind: str                    # "plant" (re-simulate) | "sensor" (post-process)
+    param: str                   # the field varied
+    levels: list[Any]            # levels[0] must be the no-mismatch control
+    target: str = ""             # PERTURBATION_TYPES key, plant sweeps only
     fixed: dict[str, Any] = field(default_factory=dict)
-    label: str = ""
+    label: str = ""              # figure axis label
     experiment: int = 0
 
     def axis_label(self) -> str:
@@ -59,7 +41,7 @@ class Sweep:
             if v is None:
                 out.append(0.0)
             elif self.param == "quantize_bits":
-                # More bits = finer = less mismatch. Plot the resolution itself.
+                # more bits = finer; plot the resolution itself
                 out.append(0.0 if v is None else 1.0 / (2**v))
             else:
                 out.append(float(v))

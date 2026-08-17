@@ -1,22 +1,9 @@
-"""
-Multi-step prediction.
+"""Multi-step prediction, where a wrong latent actually shows up (one-step MSE
+flatters any smooth function over 20 ms).
 
-One-step MSE flatters a dynamics model: over 20 ms almost any smooth function
-looks right. Closing the loop on the model's own output and running it forward
-is where a wrong latent actually shows up, so this is the metric that matters
-for stage 2 (an online-optimised embedding is only useful if it improves
-multi-step prediction).
-
-Two views are provided:
-
-``rollout`` / ``rollout_episode``
-    Open-loop from the first state to the end of the episode -- what you plot.
-
-``horizon_errors``
-    Every valid start index in the episode rolled forward ``H`` steps at once,
-    then the error at step ``H`` averaged over starts. Unbiased across the
-    trajectory, unlike a single rollout from t=0 whose error is dominated by
-    wherever the first big mistake happened.
+``rollout`` / ``rollout_episode`` are open-loop from the first state -- what you
+plot. ``horizon_errors`` rolls every valid start forward H steps and averages,
+which is unbiased across the trajectory.
 """
 
 from __future__ import annotations
@@ -35,15 +22,8 @@ def rollout(
     init_state: torch.Tensor,
     actions: torch.Tensor,
 ) -> torch.Tensor:
-    """Open-loop rollout feeding predictions back in.
-
-    Args:
-        z: (embed_dim,) or (1, embed_dim) latent for the door.
-        init_state: (2,) or (1, 2) starting state.
-        actions: (T, 1) action sequence.
-    Returns:
-        (T + 1, 2) predicted states, starting with ``init_state``.
-    """
+    """Open-loop rollout feeding predictions back in. Returns (T+1, 2) states,
+    starting with ``init_state``."""
     state = init_state.reshape(1, -1)
     z = z.reshape(1, -1)
     traj = [state]
@@ -61,10 +41,7 @@ def rollout_episode(
     horizon: int | None = None,
     device: str | torch.device = "cpu",
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Roll out one episode from its first state.
-
-    Returns ``(predicted, truth)``, both ``(H + 1, 2)`` in raw SI units.
-    """
+    """Roll out one episode from its first state -> ``(pred, truth)``, both (H+1, 2)."""
     n = len(episode) if horizon is None else min(horizon, len(episode))
     actions = torch.as_tensor(episode.action[:n], dtype=torch.float32, device=device)
     init = torch.as_tensor(episode.state[0], dtype=torch.float32, device=device)
@@ -74,12 +51,8 @@ def rollout_episode(
 
 
 def _free_window_mask(episode: Episode, horizon: int, n_starts: int) -> np.ndarray:
-    """Starts whose whole ``horizon``-step window stays clear of a joint limit.
-
-    Limit contact adds a constraint torque that is not part of the action, so a
-    window containing one is not a test of the learned free dynamics. The RLS
-    baseline excludes the same samples in ``moving_mask``.
-    """
+    """Starts whose whole ``horizon``-step window stays clear of a joint limit;
+    limit contact adds a constraint torque outside the action."""
     hit = np.concatenate([[0], np.cumsum(episode.near_limit.astype(np.int64))])
     in_window = hit[np.arange(n_starts) + horizon] - hit[np.arange(n_starts)]
     return in_window == 0
@@ -94,11 +67,8 @@ def multistart_rollout(
     device: str | torch.device = "cpu",
     exclude_near_limit: bool = True,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Roll every valid start index forward ``horizon`` steps, in one batch.
-
-    Returns ``(pred_final, true_final)``, both ``(n_kept, 2)``: the state
-    predicted ``horizon`` steps after each start, and the truth there.
-    """
+    """Roll every valid start forward ``horizon`` steps in one batch ->
+    ``(pred_final, true_final)``, both (n_kept, 2)."""
     T = len(episode)
     n_starts = T - horizon + 1
     if n_starts <= 0:
@@ -157,11 +127,8 @@ def horizon_errors(
 def aggregate_horizon_errors(
     per_episode: list[dict[int, dict[str, float]]]
 ) -> dict[int, dict[str, float]]:
-    """Combine per-episode horizon errors, weighting by number of start indices.
-
-    RMSEs are pooled through their squares so the result equals the RMSE over
-    all starts from all episodes, not an average of per-episode RMSEs.
-    """
+    """Combine per-episode horizon errors, weighted by start count. RMSEs pool
+    through their squares, so the result is the RMSE over all starts."""
     horizons = sorted({h for pe in per_episode for h in pe})
     out: dict[int, dict[str, float]] = {}
     for h in horizons:

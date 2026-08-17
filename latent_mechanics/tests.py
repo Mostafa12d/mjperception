@@ -1,13 +1,8 @@
-"""
-Self-checks for the latent-mechanics stage-1 pipeline.
+"""Self-checks for the stage-1 pipeline.
 
-These pin the properties that are easy to break silently later, above all the
-stage-2 contract: the dynamics model must accept an arbitrary latent tensor and
-must let gradients flow into it while every network weight stays frozen. If that
-test fails, online embedding optimisation is impossible no matter how good the
-stage-1 numbers look.
+The load-bearing one is the stage-2 contract: the model must accept an arbitrary
+latent and let gradients reach it while every weight stays frozen.
 
-Run:
     python3.10 -m latent_mechanics.tests
 """
 
@@ -43,10 +38,8 @@ def check(name: str, condition: bool, detail: str = "") -> None:
         _FAILURES.append(name)
 
 
-# ---------------------------------------------------------------------------
-
 def test_rls_baseline_untouched() -> None:
-    """The baseline must keep working exactly as before, with its globals intact."""
+    """The baseline must keep working, with its globals intact."""
     print("\nRLS baseline integrity")
     before = (dyn.T_END, dyn.N_STEPS, dyn.DT)
     with episode_length(2.0):
@@ -73,13 +66,13 @@ def test_model_contract() -> None:
     shared = model(s, a, torch.randn(8))
     check("single latent broadcasts over batch", shared.shape == (16, 2), str(shared.shape))
 
-    # A latent that never came from any table at all.
+    # a latent that never came from any table
     free = torch.nn.Parameter(torch.zeros(1, 8))
     check("accepts a standalone nn.Parameter", model(s, a, free).shape == (16, 2))
 
     m_delta = MechanicsDynamicsModel(embed_dim=4, hidden_sizes=[16], predict_delta=True)
     with torch.no_grad():
-        # Zero the output head so the predicted delta is exactly delta_mean.
+        # zero the head so the predicted delta is exactly delta_mean
         m_delta.net[-1].weight.zero_()
         m_delta.net[-1].bias.zero_()
     pred = m_delta(s, a, torch.zeros(16, 4))
@@ -176,7 +169,7 @@ def test_data_pipeline(cfg: ExperimentConfig) -> None:
     check("next_state matches state shape", pack["next_state"].shape == (n, 2))
     check("every sample carries a door id", pack["door_id"].shape == (n,))
 
-    # Consecutive transitions must chain: next_state[i] == state[i+1] inside an episode.
+    # next_state[i] must equal state[i+1] inside an episode
     ptr = pack["episode_ptr"]
     lo, hi = int(ptr[0]), int(ptr[1])
     chained = np.allclose(
@@ -184,7 +177,6 @@ def test_data_pipeline(cfg: ExperimentConfig) -> None:
     )
     check("transitions chain within an episode", chained)
 
-    # Held-out doors must not occupy an embedding row.
     heldout_ids = pack["door_id"][pack["split"] == 2]
     check(
         "held-out door ids sit above the embedding table",
@@ -209,12 +201,8 @@ def test_data_pipeline(cfg: ExperimentConfig) -> None:
 
 
 def test_transition_fidelity() -> None:
-    """A recorded transition must be what MuJoCo actually does.
-
-    Re-simulates one door from rest with the same zero-order-hold torque and
-    checks the logged ``(state, action, next_state)`` triples against a fresh
-    run. This is what catches an off-by-one in the state/torque alignment.
-    """
+    """A recorded transition must be what MuJoCo actually does. Catches an
+    off-by-one in the state/torque alignment."""
     print("\nTransition fidelity vs MuJoCo")
     cfg = load_config(None)
     params = door_sampler.sample_door_params(cfg.doors, np.random.default_rng(3), 0)
@@ -229,7 +217,6 @@ def test_transition_fidelity() -> None:
         log = dyn.simulate(profile.as_fn(), model=model)
     tr = transitions_from_log(log, 10)
 
-    # The action must equal the commanded hold for that interval.
     tau_fn = profile.as_fn()
     k = 5
     j = 10 - 1 + 10 * k  # start index of the k-th transition
@@ -277,7 +264,7 @@ def test_rollout_shapes() -> None:
 
 
 def test_checkpoint_provenance(cfg: ExperimentConfig) -> None:
-    """A5: loading a predictor must record its hash, and a pin must be enforced."""
+    """Loading a predictor must record its hash, and a pin must be enforced."""
     import tempfile
 
     from latent_mechanics import provenance
@@ -313,12 +300,10 @@ def test_checkpoint_provenance(cfg: ExperimentConfig) -> None:
                   provenance.loaded().get("unit_test", ("", ""))[0] == digest)
             check("recorded table_rows matches the saved table", t.num_doors == 7)
 
-            # A correct pin, full and truncated, must pass.
             load_checkpoint(p, stage="unit_test", expected_sha256=digest)
             load_checkpoint(p, stage="unit_test", expected_sha256=digest[:16])
             check("a matching pin (full and 16-char prefix) is accepted", True)
 
-            # A wrong pin must raise, not warn.
             raised = False
             try:
                 load_checkpoint(p, stage="unit_test", expected_sha256="deadbeef")
@@ -326,7 +311,6 @@ def test_checkpoint_provenance(cfg: ExperimentConfig) -> None:
                 raised = True
             check("a mismatched pin raises ValueError", raised)
 
-            # Changing the file changes the hash, so substitution is detectable.
             table2 = DoorEmbeddingTable(num_doors=9, embed_dim=cfg.model.embed_dim)
             save_checkpoint(p, model, table2, cfg)
             check("a different checkpoint at the same path hashes differently",
@@ -340,7 +324,6 @@ def test_checkpoint_provenance(cfg: ExperimentConfig) -> None:
         finally:
             provenance.set_quiet(False)
 
-    # Every stage in the provenance table must name a real source.
     for stage, source, pattern in provenance.STAGE_SOURCES:
         check(f"provenance table entry '{stage}' names its source",
               bool(stage and source and pattern))

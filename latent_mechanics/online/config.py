@@ -1,10 +1,5 @@
-"""
-Configuration for Stage-2 online adaptation.
-
-Kept in its own module rather than extending ``latent_mechanics.config``, so
-Stage 1 stays untouched. Same conventions: nested dataclasses, partial YAML
-overrides, unknown keys raise.
-"""
+"""Configuration for Stage-2 online adaptation. Separate from
+``latent_mechanics.config`` so Stage 1 stays untouched; same conventions."""
 
 from __future__ import annotations
 
@@ -49,16 +44,11 @@ class RLSConfig:
 @dataclass
 class ExperimentsConfig:
     checkpoint: str = "runs/latent_mechanics/base/best.pt"
-    # Optional pin on the frozen predictor's sha256 (full hash or any leading
-    # prefix). Set it to make a substituted checkpoint fail loudly instead of
-    # silently changing what the reported numbers mean.
+    # sha256 pin (full or prefix); makes a substituted checkpoint fail loudly
     expected_sha256: str | None = None
     data: str = "data/door_mechanics.npz"
     split: str = "heldout_door"
-    # Doors to run. Empty means every door in the split.
-    # Latent init used by Experiment 1 and the belief animation. "zero" is
-    # the honest no-prior-knowledge start and shows the clearest learning
-    # curve; Experiment 2 compares every strategy against it.
+    # init for Experiment 1 and the animation; "zero" is the no-prior-knowledge start
     default_init: str = "zero"
     door_ids: tuple[int, ...] = ()
     max_episodes: int | None = None

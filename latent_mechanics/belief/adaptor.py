@@ -1,33 +1,9 @@
-"""
-Step 5: the UKF as a drop-in replacement for the gradient-descent belief update.
+"""UKF as a drop-in replacement for the gradient-descent belief update.
 
-``UKFLatentAdaptor`` subclasses the same ``OnlineLatentAdaptor`` base as
-``GradientLatentAdaptor``, implements the same single abstract method
-``_update(state, action, next_state)``, and therefore satisfies the existing
-interface exactly: ``predict``, ``observe``, ``reset``, ``latent``, ``belief``
-and the frozen-network guarantees all come from the base class unchanged. Any
-driver that runs the gradient adaptor runs this one with no edits.
-
-What is new is that ``belief()`` now returns a real covariance instead of
-``None``. The slot has been there since Stage 2 and was never filled.
-
-Two design points worth stating.
-
-**The filter works in normalised measurement space.** ``h(z)`` is
-``model.raw_output`` -- the normalised state delta -- and the measurement is
-``model.target``, not the raw next state. This is the space the network was
-trained in, and it is the only one in which a single R is meaningful across
-families: raw next-state units are radians for a door and metres for a drawer,
-differing by orders of magnitude, so a shared R in raw units would be
-simultaneously far too tight for one family and far too loose for another.
-
-**The state is a constant, not a trajectory.** The mechanics of an object do not
-evolve, so ``fx`` is the identity and the entire prediction step is the
-covariance inflation ``P <- P + Q``. Q is therefore not a physical process noise
-but an explicit statement of how much the filter is willing to keep revising a
-settled belief -- the direct analogue of the gradient adaptor's learning rate,
-and the reason Stage 5's "adaptation never stops when it should" failure has a
-principled fix here.
+Two design points: the filter works in normalised measurement space (``h(z)`` is
+``model.raw_output``), which is the only space where one R is meaningful across
+families; and the latent is a constant, so ``fx`` is the identity and Q alone
+decides how much a settled belief may still be revised.
 """
 
 from __future__ import annotations
@@ -51,41 +27,29 @@ from latent_mechanics.online.adaptor import ArrayLike, OnlineLatentAdaptor
 
 @dataclass
 class UKFConfig:
-    """Filter settings.
+    """Filter settings. Fields marked CHOSEN were swept; the rest are starting points."""
 
-    ``dim``, ``window``, ``adapt_Q`` and ``regenerate_sigma_points`` were chosen
-    by the user on the evidence in ``sweep.py`` and ``drift_check.py``; the rest
-    remain unswept starting points. Provenance is noted per field.
-    """
-
-    # CHOSEN. Best ratio to the oracle ceiling (0.97x vs 1.12x at d=5, 1.17x at
-    # d=4) at equal cost and equal stability. sweep.py.
-    dim: int = 6
-    alpha: float = 0.3               # sigma-point spread
+    dim: int = 6                     # CHOSEN: best ratio to the oracle ceiling. sweep.py
+    # alpha=1.0/kappa=0 keeps all sigma weights non-negative; 0.3 at d=6 gives
+    # Wm[0]=-10.1 and the transform error swamps the innovation.
+    alpha: float = 1.0
     beta: float = 2.0
     kappa: float = 0.0
-    # CHOSEN. Reproduces the exact Kalman filter on linear systems when Q > 0;
-    # filterpy's convention does not. See ukf.py.
-    regenerate_sigma_points: bool = True
-    # Initial covariance. "empirical" uses the covariance of the training
-    # latents projected into the reduced basis, which is the honest prior: it
-    # says the unseen object is about as far from the mean as a training object.
-    p0_mode: str = "empirical"       # empirical | scalar
+    n_iterations: int = 3            # 1 = plain one-shot update
+    iter_tol: float = 1e-4
+    regenerate_sigma_points: bool = True   # CHOSEN: exact KF on linear systems when Q > 0
+    p0_mode: str = "empirical"       # empirical (training-latent cov) | scalar
     p0_scale: float = 1.0
-    noise_kind: str = "adaptive"     # adaptive | fixed
+    # residual form; the innovation form's C_nu - Pzz went indefinite on 30-41% of steps
+    noise_kind: str = "residual"     # residual | adaptive | fixed
     r0: float = 1.0
     q0: float = 1e-4
-    # CHOSEN. Stationary objects marginally prefer 50 (0.54x vs 0.59x relative
-    # to no-adaptation), but under Stage-3 friction drift at 0.40/s window 50
-    # becomes actively harmful (1.42x) while 100 is the only setting still
-    # helping (0.94x). The ~9% given up on stationary objects buys the filter
-    # not breaking on time-varying ones. drift_check.py.
-    window: int = 100
-    floor: float = 1e-6           # unswept; follow-up
-    smoothing: float = 1.0        # unswept; follow-up
+    window: int = 100                # CHOSEN: only setting that survives drift. drift_check.py
+    floor: float = 1e-6              # scalar floor, legacy innovation model only
+    floor_matrix: np.ndarray | None = None   # None -> noise.IRREDUCIBLE_R
+    smoothing: float = 1.0           # unswept
     warmup: int = 10
-    # LEFT OFF by decision: couples mobility to recent surprise and can run away.
-    adapt_Q: bool = False
+    adapt_Q: bool = False            # off: couples mobility to surprise and can run away
 
 
 class UKFLatentAdaptor(OnlineLatentAdaptor):
@@ -127,6 +91,7 @@ class UKFLatentAdaptor(OnlineLatentAdaptor):
         self.noise: NoiseModel = build_noise_model(
             c.noise_kind, dim_z=self.model.state_dim, dim_x=d,
             r0=c.r0, q0=c.q0, window=c.window, floor=c.floor,
+            floor_matrix=c.floor_matrix,
             smoothing=c.smoothing, warmup=c.warmup, adapt_Q=c.adapt_Q)
 
         z0_full = self._z.detach().cpu().numpy().astype(np.float64)
@@ -140,8 +105,7 @@ class UKFLatentAdaptor(OnlineLatentAdaptor):
             x0=x0, P0=self._initial_covariance(),
             regenerate_sigma_points=c.regenerate_sigma_points,
         )
-        # Keep the base class's 16-D latent exactly consistent with the filter.
-        self._sync_latent()
+        self._sync_latent()   # keep the base class's 16-D latent consistent
 
     def _sync_latent(self) -> None:
         z_full = self.basis.decode(self.ukf.x)
@@ -151,12 +115,7 @@ class UKFLatentAdaptor(OnlineLatentAdaptor):
 
     # -- measurement function ---------------------------------------------
     def _make_hx_batch(self, s: torch.Tensor, a: torch.Tensor):
-        """All sigma points through the predictor in ONE batched forward pass.
-
-        Cost per update is therefore one network call, not 2d+1 -- the same order
-        as a single gradient step, which is what keeps the filter competitive on
-        compute with the module it replaces.
-        """
+        """All sigma points through the predictor in one batched forward pass."""
         def hx_batch(sigmas_r: np.ndarray) -> np.ndarray:
             z_full = self.basis.decode(np.asarray(sigmas_r, dtype=np.float64))
             n = z_full.shape[0]
@@ -176,18 +135,22 @@ class UKFLatentAdaptor(OnlineLatentAdaptor):
 
         self.ukf.Q = self.noise.Q()
         self.ukf.predict()
+        hx_batch = self._make_hx_batch(state, action)
         try:
-            self.ukf.update(y, R=self.noise.R(),
-                            hx_batch=self._make_hx_batch(state, action))
+            if self.cfg.n_iterations > 1:
+                self.ukf.iterated_update(
+                    y, R=self.noise.R(), hx_batch=hx_batch,
+                    n_iterations=self.cfg.n_iterations, tol=self.cfg.iter_tol)
+            else:
+                self.ukf.update(y, R=self.noise.R(), hx_batch=hx_batch)
         except np.linalg.LinAlgError:
-            # A failed Cholesky means P drifted indefinite. Repair and skip this
-            # measurement rather than propagating NaNs through the whole run.
+            # P drifted indefinite: repair and skip this measurement
             self.ukf.state.P = nearest_pd(self.ukf.state.P, floor=1e-9)
             return float("nan"), {"filter_reset": 1.0}
 
         st = self.ukf.state
         self.ukf.state.P = nearest_pd(st.P, floor=1e-12)
-        self.noise.observe(st.y, st.Pzz, st.K)
+        self.noise.observe(st.y, st.Pzz, st.K, residual=st.y_post)
         self._sync_latent()
 
         diag = self.noise.diagnostics()
@@ -196,17 +159,13 @@ class UKFLatentAdaptor(OnlineLatentAdaptor):
             "gain_norm": float(np.linalg.norm(st.K)),
             "P_trace": float(np.trace(st.P)),
             "S_trace": float(np.trace(st.S)),
+            "n_iterations": float(st.n_iterations),
             **diag,
         }
 
     # -- belief ------------------------------------------------------------
     def belief(self) -> dict[str, Any]:
-        """Mean and covariance in FULL 16-D coordinates.
-
-        The covariance is ``V^T P_r V``: rank ``d`` and therefore singular in
-        16-D. That is the honest representation of what the filter believes --
-        zero uncertainty in the directions the reduced basis discards.
-        """
+        """Mean and covariance in full 16-D coordinates; the covariance is rank ``dim``."""
         return {
             "mean": self.latent,
             "cov": self.basis.decode_covariance(self.ukf.P),

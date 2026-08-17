@@ -1,17 +1,8 @@
-"""
-Stage-1 training: joint optimisation of the dynamics network and one embedding
-per training door.
+"""Stage-1 training: the dynamics network and one embedding per training door,
+optimised jointly against MSE on the next state.
 
-    for each batch:
-        z = embedding_table[door_id]          # stage 1 only
-        next_state_hat = model(state, action, z)
-        loss = MSE(next_state_hat, next_state)
+Embeddings see far fewer gradients each, so they run on their own larger LR.
 
-Both the network weights and the embedding rows receive gradients from that one
-loss. The embeddings get far fewer updates each (a given door appears in a
-fraction of batches), so they run on their own, larger learning rate.
-
-Run:
     python3.10 -m latent_mechanics.train --config configs/latent_mechanics.yaml
     tensorboard --logdir runs/latent_mechanics
 """
@@ -42,12 +33,8 @@ from latent_mechanics.rollout import aggregate_horizon_errors, horizon_errors
 
 
 def resolve_device(spec: str) -> torch.device:
-    """'auto' prefers CUDA and otherwise stays on CPU.
-
-    MPS is available but not chosen automatically: for an MLP this small the
-    kernel-launch overhead usually makes it slower than CPU. Pass ``device: mps``
-    explicitly if you want it.
-    """
+    """'auto' prefers CUDA, else CPU. MPS is never chosen automatically: for an MLP
+    this small its launch overhead usually loses to CPU."""
     if spec != "auto":
         return torch.device(spec)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -61,12 +48,8 @@ def set_seed(seed: int) -> None:
 def make_optimizer(
     model: nn.Module, embeddings: DoorEmbeddingTable, cfg: ExperimentConfig
 ) -> torch.optim.Optimizer:
-    """Two parameter groups: the shared network and the per-door latents.
-
-    The latents get a larger LR and stronger weight decay. The decay is not just
-    regularisation -- it keeps the latent cloud compact and centred near zero,
-    which is the region a stage-2 embedding initialised at zero will start from.
-    """
+    """Two groups: the shared network, and the per-door latents on a larger LR and
+    stronger decay (which keeps the latent cloud compact)."""
     return torch.optim.AdamW(
         [
             {
@@ -99,14 +82,8 @@ def lr_scale(epoch: int, cfg: ExperimentConfig) -> float:
 def batch_losses(
     model, embeddings, batch, device, loss_space: str
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Training loss plus raw-unit metrics for the same batch.
-
-    ``loss_space='normalized'`` measures the next-state error with each
-    dimension divided by its std. It is still MSE on the next state -- angle
-    (rad) and velocity (rad/s) differ by more than an order of magnitude in
-    scale here, and without the rescaling the velocity term would dominate the
-    gradient entirely.
-    """
+    """Training loss plus raw-unit metrics. ``loss_space='normalized'`` divides
+    each dimension by its std, so velocity does not dominate the gradient."""
     state = batch["state"].to(device, non_blocking=True)
     action = batch["action"].to(device, non_blocking=True)
     next_state = batch["next_state"].to(device, non_blocking=True)
@@ -140,8 +117,7 @@ def evaluate_split(model, embeddings, loader, device, loss_space) -> dict[str, f
         n = len(batch["state"])
         loss, metrics = batch_losses(model, embeddings, batch, device, loss_space)
         totals["loss"] = totals.get("loss", 0.0) + float(loss) * n
-        # RMSEs are pooled as sums of squares so the result is the RMSE over the
-        # whole split rather than a mean of per-batch RMSEs.
+        # pooled as sums of squares: RMSE over the split, not a mean of RMSEs
         for k in ("rmse_angle", "rmse_velocity"):
             totals[k] = totals.get(k, 0.0) + metrics[k] ** 2 * n
         totals["mse_raw"] = totals.get("mse_raw", 0.0) + metrics["mse_raw"] * n
@@ -185,8 +161,7 @@ def train(cfg: ExperimentConfig, data_path: str | None = None) -> Path:
     print(train_ds.summary())
     print(val_ds.summary())
 
-    # Statistics come from the training split only and are then frozen into the
-    # model, so validation and any later stage-2 run are measured on the same scale.
+    # train-split statistics, frozen into the model so every later stage shares a scale
     norm_stats = train_ds.norm_stats()
     model = build_model_from_config(cfg.model, norm_stats).to(device)
     embeddings = DoorEmbeddingTable(
@@ -266,9 +241,7 @@ def train(cfg: ExperimentConfig, data_path: str | None = None) -> Path:
         writer.add_scalar("lr/network", optimizer.param_groups[0]["lr"], epoch)
         writer.add_scalar("lr/embeddings", optimizer.param_groups[1]["lr"], epoch)
 
-        # Latent-space geometry. If the norms collapse toward zero the doors are
-        # not being distinguished; if they explode, stage-2 optimisation from a
-        # zero init has a long way to travel.
+        # latent geometry: collapsing norms mean the doors are not distinguished
         with torch.no_grad():
             w = embeddings.weight
             writer.add_scalar("embed/norm_mean", float(w.norm(dim=1).mean()), epoch)
@@ -326,8 +299,7 @@ def train(cfg: ExperimentConfig, data_path: str | None = None) -> Path:
         f"best val loss {best_val:.6f} at epoch {best_epoch + 1}"
     )
     print(f"checkpoints: {run_dir / 'best.pt'} , {run_dir / 'last.pt'}")
-    # Record the identity of what was just produced, so a downstream stage's
-    # provenance line can be matched back to the run that created it.
+    # record what was produced, so a downstream provenance line matches back here
     provenance.log_checkpoint(run_dir / "best.pt",
                               stage=f"trained:{cfg.train.run_name}",
                               table_rows=getattr(embeddings, "num_doors", None))

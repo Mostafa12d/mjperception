@@ -1,21 +1,8 @@
-"""
-Reduced-dimension sweep: d = 4, 5, 6, adaptive vs fixed R.
+"""Reduced-dimension sweep: d = 4, 5, 6, adaptive vs fixed R.
 
-Reports numbers for the user to choose from. It deliberately does not pick a
-winner: d, the adaptive-R window and floor, and whether Q should adapt are all
-flagged in the brief as decisions for the user, so this script surfaces the
-evidence and stops.
-
-Accuracy is reported **relative to the per-family oracle ceiling** from the
-geometry report -- the error achieved by the best latent that exists for each
-object, fitted offline on all of its data. Absolute error is not comparable
-across families (a drawer moves in metres, a door in radians), and more
-importantly it conflates "the filter found a bad latent" with "no latent is any
-good for this object", which is a distinction the ceiling makes explicit. A
-ratio of 1.0 means the filter recovered everything a perfect belief could.
-
-Filter stability is reported alongside, because a filter can look accurate while
-being one bad Cholesky from divergence.
+Accuracy is reported relative to the per-object oracle ceiling, since absolute
+error is not comparable across families. Ratio 1.0 = the filter recovered
+everything a perfect belief could. Stability is reported alongside.
 
     python3.10 -m latent_mechanics.belief.sweep
 """
@@ -46,10 +33,9 @@ from latent_mechanics.online.loop import (
 PREDICTOR = DEFAULT_TABLE
 DATA = "runs/latent_mechanics/geometry/data_all_families.npz"
 
-# Per-family oracle ceilings, measured in the geometry investigation (Step 6 of
-# latent_mechanics/geometry/README.md). Normalised angle error of the best
-# latent fitted offline per object.
-ORACLE_CEILING = {
+# Family medians over each object's FULL stream. Reference only -- not used to
+# score, because the methods are scored on the tail. Use ``object_ceilings``.
+ORACLE_CEILING_LEGACY = {
     "door": 1.671e-2, "nonlinear_hinge": 1.500e-2, "soft_close": 1.880e-2,
     "drawer": 1.642e-1, "bifold": 2.011e-2, "laptop": 6.147e-2,
 }
@@ -66,9 +52,56 @@ def _nrmse(err: np.ndarray, st: np.ndarray, nx: np.ndarray) -> float:
     return float(np.sqrt(np.mean(err[:, 0] ** 2)) / scale)
 
 
+def _spread_inits(train_z: np.ndarray, k: int = 4, seed: int = 0) -> list[np.ndarray]:
+    """``k`` well-separated training latents, as extra oracle restarts. A single
+    medoid start stalls badly on drawers and inflates the ceiling."""
+    from sklearn.cluster import KMeans
+
+    km = KMeans(n_clusters=min(k, len(train_z)), n_init=10, random_state=seed).fit(train_z)
+    out = []
+    for c in km.cluster_centers_:
+        out.append(train_z[int(np.argmin(np.linalg.norm(train_z - c, axis=1)))])
+    return out
+
+
+def object_ceilings(model, ds, max_objects: int | None = None,
+                    init: np.ndarray | None = None, steps: int = 1200,
+                    train_z: np.ndarray | None = None) -> dict[int, float]:
+    """Per-object oracle ceiling on the same tail window the methods are scored over.
+
+    ``steps`` is deliberately high: 400 Adam steps does not converge and an
+    under-converged oracle overstates the ceiling, flattering every method.
+    """
+    from latent_mechanics.geometry.analyses import fit_oracle_latent
+
+    extra = _spread_inits(train_z) if train_z is not None else None
+    out: dict[int, float] = {}
+    ids = list(ds.door_ids)[: max_objects or len(ds.door_ids)]
+    door_ids = ds.door_id.numpy()
+    for did in ids:
+        did = int(did)
+        stream = episode_stream(ds, did, exclude_near_limit=False)
+        if len(stream) < 100:
+            continue
+        st = np.stack([s for s, _, _ in stream])
+        ac = np.stack([a for _, a, _ in stream])
+        nx = np.stack([n for _, _, n in stream])
+        tail = max(1, len(stream) // 4)
+        T = lambda v: torch.as_tensor(v[-tail:], dtype=torch.float32)
+
+        # fitted ON the scoring window, minimising the SCORED quantity
+        z = fit_oracle_latent(model, T(st), T(ac), T(nx), init, steps=steps,
+                              extra_inits=extra, objective="angle")
+        with torch.no_grad():
+            pred = model(T(st), T(ac),
+                         torch.as_tensor(z, dtype=torch.float32).reshape(1, -1)).numpy()
+        out[did] = _nrmse(pred - nx[-tail:], st[-tail:], nx[-tail:])
+    return out
+
+
 def evaluate(
     label: str, make_adaptor, ds, families, out_rows: list[dict],
-    max_objects: int | None = None,
+    max_objects: int | None = None, ceilings: dict[int, float] | None = None,
 ) -> dict:
     errs, ratios, stability = [], [], []
     ids = list(ds.door_ids)[: max_objects or len(ds.door_ids)]
@@ -87,10 +120,9 @@ def evaluate(
                                     verify_frozen=False)
         e = _nrmse(log.error[-tail:], st[-tail:], nx[-tail:])
         fam = str(families[did])
-        ceiling = ORACLE_CEILING.get(fam, np.nan)
+        ceiling = (ceilings or {}).get(did, np.nan)
         ratio = e / ceiling if np.isfinite(ceiling) and ceiling > 0 else np.nan
 
-        # Stability: NaNs, filter resets, and how the covariance behaved.
         ex = log.extras
         n_nan = int(np.sum(~np.isfinite(log.loss)))
         resets = float(np.nansum(ex.get("filter_reset", np.zeros(1))))
@@ -120,7 +152,7 @@ def evaluate(
         "frac_within_2x_ceiling": float(np.mean(np.array(finite) <= 2.0)) if finite else np.nan,
         "total_nan_steps": int(sum(s["nan"] for s in stability)),
         "total_filter_resets": float(sum(s["resets"] for s in stability)),
-        # Baselines carry no covariance, so these are legitimately absent.
+        # absent for baselines, which carry no covariance
         "median_P_trace_final": _safe(np.nanmedian, [s["p_end"] for s in stability]),
         "max_P_trace": _safe(np.nanmax, [s["p_max"] for s in stability]),
     }
@@ -160,38 +192,48 @@ def main() -> None:
     summaries: list[dict] = []
 
     print(f"\nEvaluating on {min(args.objects, len(ds.door_ids))} unseen objects "
-          f"of {len(set(families[list(ds.door_ids)]))} families\n")
+          f"of {len(set(families[list(ds.door_ids)]))} families")
+    print("  fitting per-object oracle ceilings on the scoring window...")
+    ceilings = object_ceilings(model, ds, args.objects, init, train_z=train_z)
+    print(f"  {len(ceilings)} ceilings, median {np.median(list(ceilings.values())):.3e}\n")
 
-    # Reference points, both independent of d.
-    summaries.append(evaluate(
-        "baseline:no-adaptation",
-        lambda: StaticLatentAdaptor(model, init=init), ds, families, rows, args.objects))
-    summaries.append(evaluate(
-        "baseline:gradient-descent",
-        lambda: GradientLatentAdaptor(model, init=init, lr=oc.lr, window=oc.window,
-                                      lr_decay=oc.lr_decay,
-                                      n_inner_steps=oc.n_inner_steps),
-        ds, families, rows, args.objects))
+    def ev(label, factory):
+        summaries.append(evaluate(label, factory, ds, families, rows,
+                                  args.objects, ceilings))
 
-    # d sweep, adaptive vs fixed R.
+    # reference points, both independent of d
+    ev("baseline:no-adaptation", lambda: StaticLatentAdaptor(model, init=init))
+    ev("baseline:gradient-descent",
+       lambda: GradientLatentAdaptor(model, init=init, lr=oc.lr, window=oc.window,
+                                     lr_decay=oc.lr_decay,
+                                     n_inner_steps=oc.n_inner_steps))
+
+    # d sweep; all three noise models kept so the fix stays next to the defect
     for d in dims:
-        for kind in ("adaptive", "fixed"):
+        for kind in ("residual", "adaptive", "fixed"):
             cfg = UKFConfig(dim=d, noise_kind=kind)
-            summaries.append(evaluate(
-                f"ukf:d={d}:R={kind}",
-                lambda c=cfg: UKFLatentAdaptor(model, basis, c, init=init,
-                                               prior_latents=train_z),
-                ds, families, rows, args.objects))
+            ev(f"ukf:d={d}:R={kind}",
+               lambda c=cfg: UKFLatentAdaptor(model, basis, c, init=init,
+                                              prior_latents=train_z))
 
-    # Adaptive-R window sensitivity, at the middle d only.
     d_mid = dims[len(dims) // 2]
+
+    # transform settings, held at one noise model so the two stay separable
+    for label, kw in (("alpha=0.3,iter=1 (old transform)", dict(alpha=0.3, n_iterations=1)),
+                      ("alpha=1.0,iter=1", dict(alpha=1.0, n_iterations=1)),
+                      ("alpha=1.0,iter=3 (chosen)", dict(alpha=1.0, n_iterations=3)),
+                      ("alpha=1.0,iter=6", dict(alpha=1.0, n_iterations=6))):
+        cfg = UKFConfig(dim=d_mid, noise_kind="residual", **kw)
+        ev(f"ukf:d={d_mid}:{label}",
+           lambda c=cfg: UKFLatentAdaptor(model, basis, c, init=init,
+                                          prior_latents=train_z))
+
+    # R-window sensitivity, at the middle d
     for w in windows:
-        cfg = UKFConfig(dim=d_mid, noise_kind="adaptive", window=w)
-        summaries.append(evaluate(
-            f"ukf:d={d_mid}:window={w}",
-            lambda c=cfg: UKFLatentAdaptor(model, basis, c, init=init,
-                                           prior_latents=train_z),
-            ds, families, rows, args.objects))
+        cfg = UKFConfig(dim=d_mid, noise_kind="residual", window=w)
+        ev(f"ukf:d={d_mid}:window={w}",
+           lambda c=cfg: UKFLatentAdaptor(model, basis, c, init=init,
+                                          prior_latents=train_z))
 
     hdr = (f"  {'config':30s} {'nrmse':>10} {'x ceiling':>10} {'<=2x':>7} "
            f"{'NaN':>5} {'resets':>7} {'P_end':>10} {'us/upd':>8}")

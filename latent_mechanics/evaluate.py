@@ -1,19 +1,9 @@
-"""
-Evaluation of a trained stage-1 model on the doors it was trained on.
+"""Evaluation of a trained stage-1 model on the doors it was trained on.
 
-Reports:
-  1. one-step prediction accuracy, overall and per door
-  2. multi-step rollout error vs horizon
-  3. a latent ablation -- the same model run with the correct embedding, with a
-     zero embedding, and with another door's embedding
+Reports one-step accuracy, multi-step rollout error, and a latent ablation. The
+ablation is the load-bearing check: if shuffling the embeddings barely hurts, the
+network is ignoring the latent and stage 2 has nothing to optimise.
 
-(3) is the sanity check the whole research direction depends on. If shuffling
-the embeddings barely hurts, the network has learned an average door and is
-ignoring the latent, and there will be nothing for stage-2 online adaptation to
-optimise. The gap between "correct" and "shuffled" is the headroom that stage 2
-is trying to recover for an unseen door.
-
-Run:
     python3.10 -m latent_mechanics.evaluate \\
         --checkpoint runs/latent_mechanics/base/best.pt
 """
@@ -39,11 +29,8 @@ from latent_mechanics.train import resolve_device
 def one_step_errors(
     model, latents: torch.Tensor, ds: DoorTransitionDataset, device, batch: int = 8192
 ) -> np.ndarray:
-    """Signed one-step error for every transition in ``ds``: (N, 2).
-
-    ``latents`` is indexed by door id, so passing a shuffled or zeroed table
-    here is all the latent ablation needs.
-    """
+    """Signed one-step error for every transition: (N, 2). ``latents`` is indexed
+    by door id, so a shuffled or zeroed table is all the ablation needs."""
     errs = []
     for lo in range(0, len(ds), batch):
         hi = min(lo + batch, len(ds))
@@ -79,7 +66,7 @@ def latent_ablation(
     """Correct vs zero vs shuffled embeddings, all else identical."""
     rng = np.random.default_rng(seed)
     n = table_weight.shape[0]
-    # Derangement-ish: roll by a random nonzero offset so no door keeps its own.
+    # roll by a random nonzero offset, so no door keeps its own
     shuffled = table_weight[torch.from_numpy((np.arange(n) + rng.integers(1, n)) % n)]
     variants = {
         "correct": table_weight,
@@ -97,11 +84,8 @@ def latent_probe(
 ) -> dict[str, dict[str, float]]:
     """Leave-one-door-out ridge regression from ``z`` to each true parameter.
 
-    The quantitative version of the latent-space figure. A high out-of-fold R^2
-    means the embedding encodes that physical quantity in a linearly readable
-    way, even though the parameter was never an input or a target anywhere in
-    training. Leave-one-out matters: with 48 doors and a 16-d latent an in-sample
-    fit would be near-perfect by construction and would prove nothing.
+    Out-of-fold R^2 says the embedding encodes that quantity linearly readably.
+    In-sample would be near-perfect by construction with 48 doors and 16 dims.
     """
     x = latents - latents.mean(0, keepdims=True)
     x = x / (x.std(0, keepdims=True) + 1e-8)
@@ -191,8 +175,8 @@ def evaluate(
     print(f"   angle    RMSE = {overall['rmse_angle']:.3e} rad "
           f"({np.degrees(overall['rmse_angle']):.4f} deg)")
     print(f"   velocity RMSE = {overall['rmse_velocity']:.3e} rad/s")
-    # Scale reference: how large is a typical one-step change? An RMSE well
-    # below this means the model explains the motion, not just its smallness.
+    # scale reference: RMSE well below a typical one-step change means the model
+    # explains the motion, not just its smallness
     delta = ds.next_state.numpy() - ds.state.numpy()
     ref = np.sqrt(np.mean(delta**2, axis=0))
     print(f"   for scale: RMS one-step change = {ref[0]:.3e} rad, "

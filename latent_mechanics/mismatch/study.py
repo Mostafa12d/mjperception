@@ -1,22 +1,16 @@
-"""
-Stage 3: robustness to model mismatch.
+"""Stage 3: robustness to model mismatch.
 
-Runs eight single-mechanism severity sweeps grouped into four experiments, and
-for every (sweep, level, door) evaluates the same four estimators on byte-identical
-input:
+Eight single-mechanism severity sweeps; for every (sweep, level, door) the same
+four estimators run on byte-identical input:
 
-    no-adaptation   frozen latent, never updated -- the control
+    no-adaptation   frozen latent, the control
     latent-gd       Stage-2 online latent adaptation, unchanged
-    rls-5p          RLS with the spring-aware regressor -- the strong baseline
+    rls-5p          RLS with the spring-aware regressor, the strong baseline
     rls-3p          RLS with the Stage-1 baseline's own regressor
 
-Nothing in Stages 1 or 2 is modified. The learned model is *not* retrained on the
-perturbed plants, and RLS keeps its regressor, which is the point: both methods
-hold their original assumptions while the world stops obeying them. Absolute
-error therefore rises for everyone, and the question is entirely about *relative*
-degradation and where the ranking changes.
+Neither method is retrained, so absolute error rises for everyone and the
+question is relative degradation and where the ranking changes.
 
-Run:
     python3.10 -m latent_mechanics.mismatch.study
     python3.10 -m latent_mechanics.mismatch.study --only stribeck,drift
 """
@@ -77,9 +71,8 @@ class Runner:
             "angle": float(extra.get("val_rmse_angle", np.nan)),
             "velocity": float(extra.get("val_rmse_velocity", np.nan)),
         }
-        # The reference drawn on every figure must be in the SAME units as the
-        # plotted metric. Stage 1 reports a raw RMSE, so convert it to the
-        # normalised scale using the validation split's own motion magnitude.
+        # Stage 1 reports a raw RMSE; convert to the normalised scale the figures
+        # plot, using the validation split's own motion magnitude
         try:
             from latent_mechanics.dataset import DoorTransitionDataset
             _val = DoorTransitionDataset(
@@ -170,9 +163,7 @@ def run_level(
                 "us_per_update": 1e6 * log.seconds_per_update,
                 "n_steps": n,
                 "perturb_torque_rms": stream.perturb_torque_rms,
-                # Belief stability: how much the estimate still moves once it
-                # should have settled. High values mean it is chattering, not
-                # converging.
+                # high = the estimate is chattering, not converging
                 "belief_drift_tail": _belief_drift(log, tail),
                 "belief_travel": float(np.linalg.norm(log.latents[-1] - log.latents[0])),
                 **_holdout_metrics(adaptor, holdout),
@@ -195,12 +186,8 @@ def _holdout_metrics(adaptor, holdout) -> dict:
 
 
 def _belief_drift(log, tail: int) -> float:
-    """Mean per-step movement of the belief over the final quarter, normalised.
-
-    For the latent this is ``||z_t - z_{t-1}||``; for RLS the same on the
-    parameter vector, divided by the parameter scale so the two are comparable
-    as a *relative* jitter measure.
-    """
+    """Mean per-step belief movement over the final quarter, divided by the
+    parameter scale so latent and RLS jitter are comparable."""
     z = log.latents[-tail:]
     if len(z) < 2:
         return 0.0
@@ -283,9 +270,8 @@ def write_csv(path: Path, rows: list[dict]) -> None:
 def summary_table(rows: list[dict], sweeps: list[Sweep], reference: float) -> list[dict]:
     """One row per (sweep, method): clean baseline, worst severity, degradation.
 
-    ``crossover`` is the headline column -- the first severity level at which the
-    latent adaptor's error drops below RLS-5p's, or blank if RLS keeps the lead
-    throughout. That is the quantity the whole stage exists to locate.
+    ``crossover`` is the headline: the first level at which the latent adaptor
+    beats RLS-5p, or blank if RLS keeps the lead throughout.
     """
     out = []
     for sw in sweeps:

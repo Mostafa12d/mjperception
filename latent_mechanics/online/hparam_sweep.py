@@ -1,27 +1,13 @@
 """Re-validate the online-adaptation hyperparameters on a given predictor.
 
-``configs/online_adaptation.yaml`` carries ``lr=0.03, window=32, lr_decay=3e-3,
-n_inner_steps=1``. Those were measured (see ``online/README.md`` -- constant step
-size made adaptation a net loss at 0.95x, and ``window=1`` degraded the belief at
-``lr >= 0.03``) but against the **Stage-1 doors-only** predictor,
-``runs/latent_mechanics/base/best.pt``. The geometry report's Step 6 and the
-belief/UKF branch import those same values and apply them to the **all-families**
-predictor, whose latent space has a four-order-of-magnitude scale axis the
-doors-only space does not. Nothing had re-checked them there.
+The values in ``configs/online_adaptation.yaml`` were measured against the
+doors-only predictor, but later stages apply them to the all-families one, whose
+latent space has a four-order-of-magnitude scale axis. This re-checks them there.
 
-The search grid is not committed anywhere, so this reconstructs the selection
-criterion rather than the script: prequential one-step error over the final
-quarter of each held-out object's stream, normalised per object, expressed as
-
-    gain = static_tail_error / adapted_tail_error
-
-with ``> 1`` meaning adaptation helped. ``StaticLatentAdaptor`` supplies the
-no-adaptation control at the same init, so every config is scored against the
-same reference. This is the quantity Stage 3, Stage 5 and the geometry report all
-report, so a re-tuned value is comparable to the published ones.
-
-Read-only: loads a checkpoint, writes a CSV and a JSON summary, and touches no
-config. Nothing here changes what any stage uses.
+Selection criterion: prequential one-step error over the final quarter of each
+held-out object's stream, as ``gain = static_tail_error / adapted_tail_error``,
+with > 1 meaning adaptation helped. ``StaticLatentAdaptor`` is the control at the
+same init. Read-only -- writes a CSV and a JSON summary, touches no config.
 
     python3.10 -m latent_mechanics.online.hparam_sweep --per-family 4
     python3.10 -m latent_mechanics.online.hparam_sweep \

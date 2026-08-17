@@ -1,22 +1,10 @@
-"""
-The online adaptation driver, plus latent initialisation strategies.
+"""The online adaptation driver, plus latent initialisation strategies.
 
-``run_online_adaptation`` is deliberately agnostic to what it is driving: it
-takes anything implementing ``OnlineAdaptor`` and a stream of transitions, and
-applies the same protocol to all of them --
-
-    for each transition:
-        prediction = adaptor.predict(state, action)   # belief BEFORE this data
-        adaptor.observe(state, action, next_state)    # belief revised
-
-This is *prequential* evaluation: every error reported is a one-step-ahead
-prediction on data the estimator had not yet seen. It is the only protocol under
-which the learned adaptor and RLS can be compared without one of them scoring
-itself on its own training data, and it is also what a robot actually
-experiences.
-
-Transitions are never shuffled and never revisited in bulk. A whole-trajectory
-fit would be Stage 1 again.
+``run_online_adaptation`` drives anything implementing ``OnlineAdaptor`` over a
+stream: predict with the belief held before the transition, then observe. Every
+reported error is therefore prequential, which is the only protocol under which
+the learned adaptor and RLS can be compared fairly. Transitions are never
+shuffled or revisited in bulk.
 """
 
 from __future__ import annotations
@@ -32,26 +20,16 @@ from latent_mechanics.online.adaptor import AdaptorStep, OnlineAdaptor
 Transition = tuple[np.ndarray, np.ndarray, np.ndarray]
 
 
-# ---------------------------------------------------------------------------
-# Streams
-# ---------------------------------------------------------------------------
-
 def episode_stream(
     dataset: DoorTransitionDataset,
     door_id: int,
     max_episodes: int | None = None,
     exclude_near_limit: bool = True,
 ) -> list[Transition]:
-    """All transitions for one door, in recording order.
+    """All transitions for one door, in recording order, episodes concatenated.
+    The door jumps back to closed at each boundary, visible as a small transient.
 
-    Episodes are concatenated. Each transition is scored independently, so the
-    episode boundaries do not corrupt anything -- but the door does jump back to
-    closed at each boundary, which is visible as a small transient in the error
-    curves and is worth knowing about when reading them.
-
-    ``exclude_near_limit`` matches the stage-1 training filter: joint-limit
-    contact adds a constraint torque that is not part of the action, so neither
-    estimator can be expected to predict it.
+    ``exclude_near_limit`` matches the stage-1 training filter.
     """
     out: list[Transition] = []
     n_eps = 0
@@ -89,21 +67,11 @@ def episode_boundaries(
     return bounds
 
 
-# ---------------------------------------------------------------------------
-# Initialisation strategies (Experiment 2)
-# ---------------------------------------------------------------------------
-
 def init_strategies(train_latents: np.ndarray, seed: int = 0) -> dict[str, np.ndarray]:
     """Candidate starting points for an unseen door's latent.
 
-    ``zero`` and ``mean`` are near each other but not identical: the trained
-    table is initialised around the origin and weight-decayed toward it, so its
-    centroid has small but nonzero norm.
-
-    ``medoid`` is the extra one, and it is motivated by a measurement rather
-    than symmetry: the trained latents sit on a shell whose centre contains no
-    door, so the centroid is a point the network was never evaluated at, while
-    the medoid is a real door that happens to be central.
+    ``medoid`` is a real door that happens to be central; the trained latents sit
+    on a shell, so ``mean`` is a point the network was never evaluated at.
     """
     rng = np.random.default_rng(seed)
     mean = train_latents.mean(axis=0)
@@ -115,10 +83,6 @@ def init_strategies(train_latents: np.ndarray, seed: int = 0) -> dict[str, np.nd
         "medoid": medoid.copy(),
     }
 
-
-# ---------------------------------------------------------------------------
-# Log
-# ---------------------------------------------------------------------------
 
 @dataclass
 class AdaptationLog:
@@ -137,7 +101,6 @@ class AdaptationLog:
     def __len__(self) -> int:
         return len(self.loss)
 
-    # -- summary metrics ---------------------------------------------------
     def rmse(self, dim: int = 0, first: int | None = None, last: int | None = None) -> float:
         e = self.error[first:last, dim]
         return float(np.sqrt(np.mean(e**2))) if len(e) else float("nan")
@@ -189,13 +152,8 @@ def run_online_adaptation(
     verify_frozen: bool = True,
     progress_every: int = 0,
 ) -> AdaptationLog:
-    """Drive one adaptor over one stream, recording every step.
-
-    ``verify_frozen`` re-checks the network checksum afterwards for latent
-    adaptors. It is on by default: the frozen-network requirement is the core
-    constraint of Stage 2, so it is checked on every run rather than only in
-    the test suite.
-    """
+    """Drive one adaptor over one stream, recording every step. ``verify_frozen``
+    re-checks the network checksum afterwards; on by default."""
     steps: list[AdaptorStep] = []
     for i, (s, a, ns) in enumerate(transitions):
         steps.append(adaptor.observe(s, a, ns))

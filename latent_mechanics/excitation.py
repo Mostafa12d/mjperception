@@ -1,23 +1,13 @@
-"""
-Torque excitation profiles for data collection.
+"""Torque excitation profiles for data collection.
 
-Every profile is generated as a **zero-order hold on the model timestep grid**
-(``frame_skip`` MuJoCo steps per hold). That matters: a learned transition
-``(s_t, a_t) -> s_{t+1}`` is only well defined if the torque is constant across
-the whole interval. MuJoCo still integrates at 500 Hz underneath.
+Every profile is a zero-order hold on the model timestep grid, so a transition
+``(s_t, a_t) -> s_{t+1}`` is well defined; MuJoCo still integrates at 500 Hz.
 
-The profiles deliberately mirror the excitation vocabulary the RLS baseline
-already relies on (a bias above stiction plus an oscillation for observability),
-so the two methods see comparable data.
-
-Every episode starts from the closed door. Randomising the starting angle by
-writing ``model.qpos0`` does *not* work: MuJoCo treats ``qpos0`` as the
-reference configuration at which the body sits in its XML pose, so shifting it
-decouples the joint coordinate from the door's geometric angle and silently
-corrupts the handle moment arm. State-space coverage therefore has to come from
-the torque signal, which is what the 'swing' profile is for -- a slow, large
-oscillation that carries the door open and then back closed, so the model sees
-both signs of velocity (where Coulomb friction flips).
+Every episode starts from the closed door -- randomising the start via
+``model.qpos0`` corrupts the handle moment arm, because MuJoCo treats qpos0 as
+the reference configuration. State coverage therefore comes from the torque, and
+that is what 'swing' is for: it carries the door open and back shut, so the model
+sees both signs of velocity, where Coulomb friction flips.
 """
 
 from __future__ import annotations
@@ -44,12 +34,8 @@ class TorqueProfile:
         return self.frame_skip * dyn.DT
 
     def as_fn(self):
-        """Callable ``t -> tau`` for ``run_door_dynamics_validation.simulate``.
-
-        The step index is recovered from ``t`` exactly (``t`` is always an integer
-        multiple of the MuJoCo timestep), so hold boundaries land where intended
-        instead of drifting with floating-point error.
-        """
+        """Callable ``t -> tau`` for ``dyn.simulate``. The step index is recovered
+        from ``t`` exactly, so hold boundaries do not drift."""
         values = self.values
         skip = self.frame_skip
         n = len(values)
@@ -113,11 +99,8 @@ def _swing(
     n_ctrl: int, control_dt: float, cfg: ExcitationConfig, bias: float,
     frictionloss: float, rng: np.random.Generator,
 ) -> tuple[np.ndarray, dict]:
-    """Slow, large oscillation that opens the door and pulls it back shut.
-
-    ``bias`` is ignored: a nonzero mean would bias the swing toward one
-    direction, and the point of this profile is symmetric coverage.
-    """
+    """Slow, large oscillation opening the door and pulling it back shut. ``bias``
+    is ignored: this profile exists for symmetric coverage."""
     t = _control_times(n_ctrl, control_dt)
     freq = float(rng.uniform(*cfg.swing_freq_range))
     amp = float(rng.uniform(*cfg.swing_over_friction_range)) * max(frictionloss, 0.5)
@@ -136,12 +119,8 @@ def sample_profile(
     frame_skip: int,
     frictionloss: float,
 ) -> TorqueProfile:
-    """Draw one episode's torque signal.
-
-    ``frictionloss`` scales the profile so that heavily sticking doors still
-    break away -- a door that never moves contributes no information about its
-    own mechanics.
-    """
+    """Draw one episode's torque signal. ``frictionloss`` scales it so heavily
+    sticking doors still break away and carry information."""
     kinds = list(cfg.profile_weights)
     weights = np.array([cfg.profile_weights[k] for k in kinds], dtype=float)
     kind = str(rng.choice(kinds, p=weights / weights.sum()))

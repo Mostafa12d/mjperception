@@ -1,15 +1,8 @@
-"""
-Dataset over ``(door_id, state, action, next_state)`` transitions.
+"""Dataset over ``(door_id, state, action, next_state)`` transitions.
 
-The door id is carried on every sample and is the *only* link between a sample
-and its mechanics -- the physical parameters are never fed to the model. During
-stage 1 the id indexes the embedding table; in stage 2 there is no id at all and
-a latent is optimised directly, which is why nothing downstream of the dataset
-depends on ids being contiguous or even present.
-
-Splits are episode-level. A random per-transition split would be meaningless
-here: consecutive 20 ms transitions are near-duplicates, so a "validation"
-sample drawn that way sits between two training samples.
+The door id is the only link between a sample and its mechanics; the physical
+parameters are never fed to the model. Splits are episode-level, since
+consecutive transitions are near-duplicates.
 """
 
 from __future__ import annotations
@@ -55,16 +48,9 @@ class Episode:
 
 
 class DoorTransitionDataset(Dataset):
-    """Transitions from one split of a generated ``.npz``.
-
-    Args:
-        path: dataset produced by ``latent_mechanics.data_gen``.
-        split: ``"train"``, ``"val"``, ``"heldout_door"`` or ``"all"``.
-        exclude_near_limit: drop transitions touching a joint limit. Those carry
-            a constraint torque that is not part of the action, so they are
-            legitimate dynamics but a different regime; excluding them is
-            sometimes the cleaner experiment. Off by default.
-    """
+    """Transitions from one split ("train" | "val" | "heldout_door" | "all") of a
+    ``data_gen`` ``.npz``. ``exclude_near_limit`` drops limit-touching transitions,
+    which carry a constraint torque outside the action."""
 
     def __init__(
         self,
@@ -85,7 +71,7 @@ class DoorTransitionDataset(Dataset):
         self.door_params_columns = [str(c) for c in raw["door_params_columns"]]
         self.config_yaml = str(raw["config_yaml"])
 
-        # Full arrays kept so episode lookup can span splits consistently.
+        # full arrays kept so episode lookup can span splits
         self._all = {
             k: raw[k]
             for k in ("state", "action", "next_state", "t", "door_id",
@@ -132,12 +118,8 @@ class DoorTransitionDataset(Dataset):
     # -- metadata ---------------------------------------------------------
     @property
     def num_embedding_rows(self) -> int:
-        """Rows the embedding table needs: one per *training* door.
-
-        Held-out doors deliberately get no row. Their ids continue past this
-        value, so an accidental lookup fails loudly instead of silently reusing
-        another door's latent.
-        """
+        """One row per training door. Held-out ids continue past this, so a stray
+        lookup fails loudly rather than reusing another door's latent."""
         return self.n_train_doors
 
     @property
@@ -153,11 +135,8 @@ class DoorTransitionDataset(Dataset):
 
     # -- normalisation ----------------------------------------------------
     def norm_stats(self) -> dict[str, torch.Tensor]:
-        """Per-dimension mean/std over this split, for the model's buffers.
-
-        Always compute these on the *training* split and reuse them elsewhere;
-        recomputing per split would make metrics incomparable.
-        """
+        """Per-dimension mean/std for the model's buffers. Compute on train and
+        reuse; recomputing per split makes metrics incomparable."""
         state = self.state.numpy()
         action = self.action.numpy()
         delta = self.next_state.numpy() - state
@@ -179,11 +158,8 @@ class DoorTransitionDataset(Dataset):
         return np.nonzero(self._episode_split == SPLIT_CODES[self.split])[0]
 
     def episode(self, episode_id: int) -> Episode:
-        """Full contiguous episode, ignoring any ``exclude_near_limit`` filter.
-
-        Rollouts need every consecutive step, so filtered-out transitions cannot
-        be skipped here without breaking the chain.
-        """
+        """Full contiguous episode, ignoring ``exclude_near_limit``: rollouts need
+        every consecutive step or the chain breaks."""
         lo, hi = self._episode_ptr[episode_id], self._episode_ptr[episode_id + 1]
         sl = slice(lo, hi)
         return Episode(

@@ -1,15 +1,6 @@
-"""
-Stage 2: online latent adaptation.
+"""Stage 2: online latent adaptation on an unseen door. The Stage-1 network stays
+frozen and only the latent changes, one transition at a time.
 
-A robot meets an unseen door and improves its mechanics belief continuously
-while interacting with it. The Stage-1 dynamics network stays completely frozen;
-only the latent changes.
-
-    z_0  --(observe one transition)-->  z_1  -->  z_2  -->  ...  -->  z_T
-
-Stage 1 is imported, never modified.
-
-Entry points:
     python3.10 -m latent_mechanics.online.experiments
     python3.10 -m latent_mechanics.online.tests
 """

@@ -1,14 +1,9 @@
-"""
-Self-checks for Stage-2 online adaptation.
+"""Self-checks for Stage-2 online adaptation.
 
-The load-bearing ones are the frozen-network checks. Stage 2's defining
-constraint is that only the latent may change, and a violation would be easy to
-miss: the model would simply get better and the experiments would look great.
-These verify it three ways -- ``requires_grad`` flags, gradient leakage onto
-network tensors, and a bitwise-style checksum over every weight before and after
-a real adaptation run.
+The load-bearing ones are the frozen-network checks, verified three ways
+(``requires_grad``, gradient leakage, weight checksum), because a violation would
+just make the experiments look better.
 
-Run:
     python3.10 -m latent_mechanics.online.tests
 """
 
@@ -64,8 +59,6 @@ def _toy_stream(n: int = 400, seed: int = 0):
         s = ns
     return out
 
-
-# ---------------------------------------------------------------------------
 
 def test_frozen_network() -> None:
     print("\nFrozen network (the Stage-2 constraint)")

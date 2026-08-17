@@ -1,26 +1,14 @@
-"""
-Sensor-level model mismatch: the plant is ideal, the measurements are not.
+"""Sensor-level model mismatch: the plant is ideal, the measurements are not.
 
-Applied to a *state sequence*, never to transitions directly. This matters and
-is easy to get wrong: consecutive transitions share a state -- the ``next_state``
-of transition ``t`` is the ``state`` of transition ``t+1`` -- so perturbing the
-two fields independently would give the robot two different readings of the same
-instant and halve the effective noise through averaging. Corrupting the
-trajectory once and then rebuilding transitions from it is what a real encoder
-does.
-
-Pipeline order, matching a real acquisition chain:
+Applied to a STATE SEQUENCE, never to transitions directly: consecutive
+transitions share a state, so perturbing both fields independently would give two
+readings of the same instant and halve the effective noise.
 
     true state -> additive noise -> quantisation -> dropout (hold) -> latency
 
-Only the *state* is corrupted. Torque sensing is left ideal so that each
-experiment isolates one mechanism; adding actuation noise would be a separate
-sweep.
-
-Both estimators receive exactly the same corrupted stream, and both are scored
-against the true next state rather than the noisy one. Scoring against the noisy
-reading would impose a floor of sigma on everybody and measure the sensor
-instead of the estimator.
+Only the state is corrupted; torque sensing stays ideal. Every estimator gets the
+same stream and all are scored against the true next state, since scoring against
+the noisy reading would measure the sensor instead of the estimator.
 """
 
 from __future__ import annotations
@@ -36,28 +24,14 @@ JOINT_SPAN = JOINT_RANGE[1] - JOINT_RANGE[0]
 
 @dataclass
 class SensorPipeline:
-    """A configurable observation channel.
+    """A configurable observation channel."""
 
-    Args:
-        theta_sigma: Gaussian noise on the angle [rad].
-        theta_dot_sigma: Gaussian noise on the velocity [rad/s]. If ``None``,
-            it is *derived* from ``theta_sigma`` as ``sqrt(2)*sigma/dt``, which
-            is what you get when velocity is obtained by differencing a noisy
-            encoder -- the realistic coupling, and a punishing one: at dt=0.02
-            it amplifies position noise about 70x.
-        quantize_bits: encoder resolution over the joint span. ``None`` disables.
-        dropout_prob: probability that a sample is lost; the last good reading is
-            held, as a real driver would.
-        latency_steps: whole-model-step delay on the state, with the action
-            remaining current -- the estimator reasons about a stale pose.
-        seed: per-stream RNG seed.
-    """
-
-    theta_sigma: float = 0.0
+    theta_sigma: float = 0.0            # rad
+    # rad/s; None derives sqrt(2)*sigma/dt, as differencing a noisy encoder would
     theta_dot_sigma: float | None = None
-    quantize_bits: int | None = None
-    dropout_prob: float = 0.0
-    latency_steps: int = 0
+    quantize_bits: int | None = None    # encoder resolution over the joint span
+    dropout_prob: float = 0.0           # lost samples hold the last good reading
+    latency_steps: int = 0              # stale state, current action
     seed: int = 0
 
     def is_identity(self) -> bool:
@@ -123,10 +97,8 @@ class SensorPipeline:
 def states_from_transitions(
     state: np.ndarray, next_state: np.ndarray
 ) -> np.ndarray:
-    """Recover the ``(T+1, 2)`` state sequence a transition list came from.
-
-    Only valid within a contiguous episode, where ``next_state[i] == state[i+1]``.
-    """
+    """Recover the ``(T+1, 2)`` state sequence a transition list came from. Only
+    valid within a contiguous episode."""
     return np.concatenate([state, next_state[-1:]], axis=0)
 
 

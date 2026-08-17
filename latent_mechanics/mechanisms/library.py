@@ -1,26 +1,11 @@
-"""
-A family of articulated mechanisms behind one interaction interface.
+"""A family of articulated mechanisms behind one interaction interface.
 
-Every mechanism exposes the same API the door always had:
-
-    state  = [q, qdot]        generalised position and velocity of ONE joint
-    action = tau              generalised force on that joint
-
-For a revolute joint that is radians / rad/s / N*m; for a prismatic joint it is
-metres / m/s / N. **The interface deliberately does not rescale between them.**
-Whether a representation trained on radians transfers to metres is precisely the
-question this stage asks, so normalising the units away would answer it by
-construction. ``analysis.py`` reports a dimensionless diagnostic separately, to
-tell a unit-scale failure apart from a mechanics failure.
-
-Actions are applied directly to the actuated degree of freedom
-(``qfrc_applied[dof]``) rather than through a handle site. Stages 1-3 pushed on
-a handle and reconstructed hinge torque, which is equivalent for a door but has
-no meaning for a drawer. Direct generalised force is the only formulation that
-is identical across joint types. It is not bit-identical to the handle path --
-measured divergence on a door is 1.2e-3 rad over 3 s, from the one-step stale
-site kinematics compounding through stiction -- so Stage-4 data is regenerated
-throughout and never mixed with earlier datasets.
+Every mechanism exposes ``state = [q, qdot]`` and ``action = tau`` for ONE joint.
+Units are NOT rescaled between revolute (rad, N*m) and prismatic (m, N): whether
+a representation trained on radians transfers to metres is the question this
+stage asks. Actions go straight to ``qfrc_applied[dof]``, the only formulation
+identical across joint types, so Stage-4 data is regenerated rather than mixed
+with the earlier handle-site datasets.
 
 The six families, in increasing distance from the training distribution:
 
@@ -56,21 +41,15 @@ ASSETS = Path(__file__).parent / "assets"
 DOOR_XML = "door.xml"  # lives in scenes/, resolved by FamilySpec.resolve_xml
 
 
-# ---------------------------------------------------------------------------
-# An extra perturbation this stage needs
-# ---------------------------------------------------------------------------
-
 @dataclass
 class SoftCloseDamper(PlantPerturbation):
-    """A damper that engages only near the closed position.
+    """A soft-close hinge: free through most of the range, heavily damped over the
+    last few degrees.
 
         tau_extra = -gain * qdot * exp(-(q / width)^2)
 
-    This is what a soft-close hinge or drawer slide actually does: free through
-    most of the range, then heavily damped over the last few degrees so it
-    cannot slam. It is a *state-dependent* damping coefficient, which no
-    constant-`b` model can express, and it is qualitatively different from the
-    Stribeck case because it depends on position rather than speed.
+    A position-dependent damping coefficient, which no constant-`b` model can
+    express, and unlike Stribeck it depends on position rather than speed.
     """
 
     gain: float = 6.0
@@ -83,10 +62,6 @@ class SoftCloseDamper(PlantPerturbation):
     def describe(self) -> dict:
         return {"name": self.name, "gain": self.gain, "width": self.width}
 
-
-# ---------------------------------------------------------------------------
-# Mechanism instances
-# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class MechanismParams:
@@ -123,39 +98,25 @@ class FamilySpec:
     stiffness_range: tuple[float, float] = (0.0, 0.0)
     springref_range: tuple[float, float] = (0.0, 0.0)
     frac_no_spring: float = 1.0
-    # Scales the absolute excitation amplitudes so each mechanism is driven
-    # comparably hard relative to its own resistance. Without this a laptop
-    # hinge would receive door-sized torques and be flung against its stop.
-    # Natural force unit of this family, in door units (N*m for revolute,
-    # N for prismatic). Excitation is generated in door units and multiplied by
-    # this, which is not cosmetic: sample_profile floors the bias at
-    # max(frictionloss, 0.5), a door-calibrated constant that would hand a
-    # 0.1 N*m laptop hinge a 3x oversized push. Dividing friction by the unit
-    # before sampling and multiplying the torques back afterwards keeps every
-    # family on the same side of that floor.
+    # Natural force unit of this family, in door units. Excitation is generated
+    # in door units and multiplied by this, so sample_profile's door-calibrated
+    # bias floor does not hand a 0.1 N*m laptop hinge an oversized push.
     force_unit: float = 1.0
-    # Bias range override, for families whose friction/inertia ratio is so high
-    # that a door-sized push saturates them against their stop.
+    # override for families a door-sized push would saturate against their stop
     bias_range: tuple[float, float] | None = None
     extra_ranges: dict[str, tuple[float, float]] = field(default_factory=dict)
     observed_joint: str = "hinge"
 
     def resolve_xml(self) -> str:
-        """Absolute path to this family's XML.
-
-        Stage-4 families ship their own asset next to this module; the four door
-        families reuse the shared ``scenes/door.xml``. Both branches return an
-        absolute path, so a cached ``MechanismParams`` stays loadable regardless
-        of the working directory.
-        """
+        """Absolute path to this family's XML: an asset beside this module, or the
+        shared ``scenes/door.xml``. Absolute, so cached params stay loadable."""
         p = ASSETS / self.xml
         return str(p) if p.exists() else scene_path(self.xml)
 
 
 FAMILIES: dict[str, FamilySpec] = {
-    # Narrow-range doors. Same mechanism as "door" but with the parameter
-    # ranges collapsed toward their centres, so curriculum level 1 can vary the
-    # amount of PARAMETER diversity before any new MECHANISM is introduced.
+    # same mechanism as "door", ranges collapsed toward their centres, so the
+    # curriculum can vary parameter diversity before introducing a new mechanism
     "door_narrow": FamilySpec(
         name="door_narrow", xml=DOOR_XML, joint_type="revolute",
         density_scale_range=(0.85, 1.20),
@@ -199,9 +160,7 @@ FAMILIES: dict[str, FamilySpec] = {
         name="laptop", xml="laptop.xml", joint_type="revolute",
         density_scale_range=(0.5, 2.0),
         friction_range=(0.15, 0.8),
-        # A real laptop hinge is heavily damped -- that is what stops the screen
-        # falling open. Without it, a 0.007 kg*m^2 screen reaches its stop in
-        # under a second under any sustained net torque.
+        # heavy damping is what stops the screen falling open
         damping_range=(0.30, 1.50),
         force_unit=0.2, bias_range=(0.7, 1.2),
     ),
@@ -286,13 +245,9 @@ def perturbations_for(params: MechanismParams) -> list[PlantPerturbation]:
 
 
 def excitation_for(base: ExcitationConfig, params: MechanismParams) -> ExcitationConfig:
-    """Excitation config for one family, expressed in DOOR units.
-
-    Torques come back in door units and are converted by ``force_unit`` in
-    ``scaled_profile``. The *shape* of the excitation -- profile mix,
-    frequencies, hold durations -- is identical for every family, so no
-    mechanism gets a richer or poorer information diet than another.
-    """
+    """Excitation config for one family, in DOOR units; ``scaled_profile`` converts
+    via ``force_unit``. The shape is identical for every family, so none gets a
+    richer information diet than another."""
     spec = FAMILIES[params.family]
     cfg = copy.deepcopy(base)
     if spec.bias_range is not None:
@@ -321,12 +276,10 @@ def joint_info(model: mujoco.MjModel) -> tuple[int, int, int]:
 
 
 def ground_truth(model: mujoco.MjModel, params: MechanismParams) -> dict[str, float]:
-    """True mechanics of the observed joint. Analysis only -- never a model input.
+    """True mechanics of the observed joint. Analysis only, never a model input.
 
-    For a revolute joint the inertia is the hinge-frame moment of inertia; for a
-    prismatic joint it is the moving mass. They are different physical
-    quantities in different units, recorded in one column because they play the
-    same role in the equation of motion.
+    "inertia" is the hinge-frame moment for a revolute joint and the moving mass
+    for a prismatic one: different quantities, one column, same role in the EOM.
     """
     bid = model.body("door").id
     _, dof, jid = joint_info(model)
